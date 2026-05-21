@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Tuple, List
 
 import pandas as pd
-from openai import OpenAI  # pip install openai
+from google import genai
+from google.genai import types  # pip install google-genai
 
 
 # ==========================
@@ -155,8 +156,34 @@ def find_best_matches_for_user(
 
 
 # ==========================
-# 3. LLM 연동 (OpenAI 예시)
+# 3. LLM 연동 (Gemini API)
 # ==========================
+
+MAX_QUESTIONS = 10
+
+# 수집 순서(앞에서부터 하나씩만 질문)
+FIELD_ORDER: List[str] = [
+    "Gender",
+    "Age",
+    "Smoking",
+    "Cleaning_Habit",
+    "Eating_in_Room",
+    "Noise_Sensitivity",
+    "weight_smoking",
+    "weight_cleaning",
+]
+
+FIELD_QUESTIONS: Dict[str, str] = {
+    "Gender": "먼저 본인의 성별을 알려주실 수 있을까요? (남성/여성)",
+    "Age": "나이는 어떻게 되시나요?",
+    "Smoking": "흡연을 하시나요? (비흡연 / 흡연)",
+    "Cleaning_Habit": "평소 청소는 얼마나 자주 하시나요? (매일 / 주 2~3회 / 주 1회 / 거의 안 함)",
+    "Eating_in_Room": "방 안에서 음식을 드시는 편인가요? (불가 / 간식·음료 / 배달·식사까지)",
+    "Noise_Sensitivity": "소음에 대한 민감도는 어느 정도인가요? (1=둔감 ~ 5=매우 예민)",
+    "weight_smoking": "룸메이트의 흡연 여부가 얼마나 중요하신가요? (1=별로 안 중요 ~ 5=매우 중요)",
+    "weight_cleaning": "룸메이트의 청소 습관이 얼마나 중요하신가요? (1=별로 안 중요 ~ 5=매우 중요)",
+}
+
 
 @dataclass
 class ChatState:
@@ -166,22 +193,46 @@ class ChatState:
         "weights": {},
         "filters": {},
     })
+    asked_fields: List[str] = field(default_factory=list)
+    questions_asked: int = 0
     finished: bool = False
 
 
-def get_openai_client() -> OpenAI:
-    api_key = os.getenv("OPENAI_API_KEY")
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+
+
+def get_gemini_client() -> genai.Client:
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("환경변수 OPENAI_API_KEY를 설정해주세요.")
-    client = OpenAI(api_key=api_key)
-    return client
+        raise RuntimeError("환경변수 GEMINI_API_KEY를 설정해주세요.")
+    return genai.Client(api_key=api_key)
+
+
+def gemini_generate(
+    client: genai.Client,
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    model_name: str = DEFAULT_GEMINI_MODEL,
+    json_response: bool = False,
+) -> str:
+    config_kwargs: Dict[str, Any] = {"system_instruction": system_prompt}
+    if json_response:
+        config_kwargs["response_mime_type"] = "application/json"
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=user_prompt,
+        config=types.GenerateContentConfig(**config_kwargs),
+    )
+    return (response.text or "").strip()
 
 
 def call_llm_parse_answer(
-    client: OpenAI,
+    client: genai.Client,
     chat_state: ChatState,
     user_text: str,
-    model_name: str = "gpt-4o-mini",
+    model_name: str = DEFAULT_GEMINI_MODEL,
 ) -> None:
     """
     사용자의 자유 대답을 구조화된 JSON(profile/weights/filters)에 병합
@@ -247,15 +298,13 @@ def call_llm_parse_answer(
         "이 답변을 반영해서 구조화된 JSON을 업데이트해줘."
     )
 
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
+    json_text = gemini_generate(
+        client,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        model_name=model_name,
+        json_response=True,
     )
-
-    json_text = response.choices[0].message.content.strip()
     try:
         new_data = json.loads(json_text)
     except json.JSONDecodeError:
@@ -268,58 +317,59 @@ def call_llm_parse_answer(
             chat_state.structured[section].update(new_data[section])
 
 
-def call_llm_next_question(
-    client: OpenAI,
-    chat_state: ChatState,
-    model_name: str = "gpt-4o-mini",
-) -> str:
-    """
-    현재까지의 structured 정보를 보고, 자연스러운 다음 질문 생성
-    """
+def _field_is_filled(structured: Dict[str, Dict[str, Any]], field_id: str) -> bool:
+    prof = structured["profile"]
+    weights = structured["weights"]
 
-    system_prompt = """
-    너는 룸메이트 매칭을 위한 대화형 상담사야.
-    지금까지 수집된 정보를 보고, 다음에 물어보면 좋을 한 가지 주제를 골라
-    한국어로 자연스럽게 질문 한두 문장을 만들어줘.
+    if field_id == "weight_smoking":
+        return "smoking" in weights
+    if field_id == "weight_cleaning":
+        return "cleaning" in weights
+    return field_id in prof
 
-    스타일:
-    - 존댓말, 친절한 말투
-    - 이미 사용자가 말한 내용을 간단히 공감/요약해 준 뒤
-      새로운 정보를 요청하면 좋아.
-    - 너무 길게 말하지 말고, 1~2문장으로.
 
-    주의:
-    - 이미 structured 데이터에 있는 값들은 되도록 반복해서 묻지 마.
-    - 아직 채워지지 않은 정보 중 하나를 골라 물어봐.
-    """
+def get_first_missing_field(structured: Dict[str, Dict[str, Any]]) -> Optional[str]:
+    """아직 채워지지 않은 필수 항목 중 우선순위가 가장 높은 항목."""
+    for field_id in FIELD_ORDER:
+        if not _field_is_filled(structured, field_id):
+            return field_id
+    return None
 
-    user_prompt = (
-        "현재까지 구조화된 정보:\n"
-        f"{json.dumps(chat_state.structured, ensure_ascii=False)}\n\n"
-        "우리가 최종적으로 알고 싶은 정보는:\n"
-        "- profile: Gender, Age, Smoking, Cleaning_Habit, Eating_in_Room, Noise_Sensitivity, Sleep_Duration, Daily_Steps\n"
-        "- weights: smoking, cleaning, sleep_duration, noise, age, daily_steps, eating\n"
-        "- filters: Gender, Smoking, Age_min, Age_max\n\n"
-        "아직 비어 있는 값들 중 하나를 골라, 그에 대한 자연스러운 질문을 해줘."
-    )
 
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
+def get_next_field_to_ask(chat_state: ChatState) -> Optional[str]:
+    """아직 없고, 아직 묻지 않은 항목 중 우선순위가 가장 높은 항목."""
+    for field_id in FIELD_ORDER:
+        if field_id in chat_state.asked_fields:
+            continue
+        if not _field_is_filled(chat_state.structured, field_id):
+            return field_id
+    return None
 
-    question = response.choices[0].message.content.strip()
+
+def get_template_question(field_id: str) -> str:
+    return FIELD_QUESTIONS[field_id]
+
+
+def ask_next_question(chat_state: ChatState) -> Optional[str]:
+    """질문 1개 출력. 반환값은 질문 텍스트(없으면 None)."""
+    if chat_state.questions_asked >= MAX_QUESTIONS:
+        return None
+
+    field_id = get_next_field_to_ask(chat_state)
+    if field_id is None:
+        return None
+
+    question = get_template_question(field_id)
+    chat_state.asked_fields.append(field_id)
+    chat_state.questions_asked += 1
     return question
 
 
 def call_llm_explain_results(
-    client: OpenAI,
+    client: genai.Client,
     chat_state: ChatState,
     matches: pd.DataFrame,
-    model_name: str = "gpt-4o-mini",
+    model_name: str = DEFAULT_GEMINI_MODEL,
 ) -> str:
     """
     매칭 결과를 자연스럽게 요약/설명
@@ -357,16 +407,12 @@ def call_llm_explain_results(
         "이 정보를 바탕으로, 어떤 후보가 어떤 이유로 잘 맞을지 요약해서 설명해줘."
     )
 
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
+    return gemini_generate(
+        client,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        model_name=model_name,
     )
-
-    explanation = response.choices[0].message.content.strip()
-    return explanation
 
 
 # ==========================
@@ -374,26 +420,38 @@ def call_llm_explain_results(
 # ==========================
 
 def has_enough_info(structured: Dict[str, Dict[str, Any]]) -> bool:
+    return get_first_missing_field(structured) is None
+
+
+def apply_defaults(structured: Dict[str, Dict[str, Any]]) -> None:
+    """질문 상한에 도달했을 때 빠진 값을 기본값으로 채움."""
     prof = structured["profile"]
-    w = structured["weights"]
+    weights = structured["weights"]
 
-    needed_profile = [
-        "Gender",
-        "Age",
-        "Smoking",
-        "Cleaning_Habit",
-        "Eating_in_Room",
-        "Noise_Sensitivity",
-    ]
+    profile_defaults = {
+        "Gender": "Male",
+        "Age": 25,
+        "Smoking": 0,
+        "Cleaning_Habit": 1,
+        "Eating_in_Room": 1,
+        "Noise_Sensitivity": 3,
+        "Sleep_Duration": 7.0,
+        "Daily_Steps": 5000,
+    }
+    weight_defaults = {
+        "smoking": 2.0,
+        "cleaning": 2.0,
+        "eating": 1.5,
+        "noise": 2.0,
+        "age": 1.5,
+        "sleep_duration": 1.5,
+        "daily_steps": 1.0,
+    }
 
-    if not all(k in prof for k in needed_profile):
-        return False
-
-    needed_weights = ["smoking", "cleaning"]
-    if not all(k in w for k in needed_weights):
-        return False
-
-    return True
+    for key, value in profile_defaults.items():
+        prof.setdefault(key, value)
+    for key, value in weight_defaults.items():
+        weights.setdefault(key, value)
 
 
 def build_user_profile(structured: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
@@ -430,16 +488,66 @@ def build_filters(structured: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     return structured["filters"].copy()
 
 
+def run_matching_and_print(
+    client: genai.Client,
+    state: ChatState,
+    df: pd.DataFrame,
+    *,
+    used_defaults: bool = False,
+) -> None:
+    if used_defaults:
+        apply_defaults(state.structured)
+        print(
+            f"\n(안내) 질문은 최대 {MAX_QUESTIONS}개까지만 진행합니다. "
+            "아직 입력되지 않은 항목은 기본값으로 채워 매칭했습니다.\n"
+        )
+
+    user_profile = build_user_profile(state.structured)
+    weights = build_weights(state.structured)
+    filters = build_filters(state.structured)
+
+    matches = find_best_matches_for_user(
+        df,
+        user_profile=user_profile,
+        weights=weights,
+        filters=filters,
+        top_n=5,
+    )
+
+    explanation = call_llm_explain_results(client, state, matches)
+    print("\n=== 매칭 결과 설명 ===")
+    print(explanation)
+    print("\n=== 상위 후보 리스트(요약) ===")
+    print(matches[[
+        "Person ID",
+        "Gender",
+        "Age",
+        "Smoking",
+        "Cleaning_Habit",
+        "Eating_in_Room",
+        "Noise_Sensitivity",
+        "Sleep Duration",
+        "Daily Steps",
+        "match_score",
+    ]])
+
+
 def chat_loop(df: pd.DataFrame) -> None:
-    client = get_openai_client()
+    client = get_gemini_client()
     state = ChatState()
 
     print("안녕하세요! 성향 기반 룸메이트 매칭 도우미입니다.")
-    print("편하게 본인에 대해 말씀해 주세요. 몇 가지 질문을 드리면서, 잘 맞는 사람을 찾아볼게요.\n")
+    print(
+        f"최대 {MAX_QUESTIONS}가지 질문만 드리고, 겹치지 않게 필요한 정보만 물어볼게요.\n"
+    )
 
-    # 첫 질문
-    question = call_llm_next_question(client, state)
-    print("AI:", question)
+    first_question = ask_next_question(state)
+    if first_question:
+        print("AI:", first_question)
+    else:
+        run_matching_and_print(client, state, df)
+        state.finished = True
+        return
 
     while not state.finished:
         try:
@@ -451,45 +559,27 @@ def chat_loop(df: pd.DataFrame) -> None:
         if not user_text:
             continue
 
-        # 1. 사용자 답 → 구조화
         call_llm_parse_answer(client, state, user_text)
 
-        # 2. 정보가 충분하면 매칭
         if has_enough_info(state.structured):
-            user_profile = build_user_profile(state.structured)
-            weights = build_weights(state.structured)
-            filters = build_filters(state.structured)
-
-            matches = find_best_matches_for_user(
-                df,
-                user_profile=user_profile,
-                weights=weights,
-                filters=filters,
-                top_n=5,
-            )
-
-            explanation = call_llm_explain_results(client, state, matches)
-            print("\n=== 매칭 결과 설명 ===")
-            print(explanation)
-            print("\n=== 상위 후보 리스트(요약) ===")
-            print(matches[[
-                "Person ID",
-                "Gender",
-                "Age",
-                "Smoking",
-                "Cleaning_Habit",
-                "Eating_in_Room",
-                "Noise_Sensitivity",
-                "Sleep Duration",
-                "Daily Steps",
-                "match_score",
-            ]])
+            run_matching_and_print(client, state, df)
             state.finished = True
             break
 
-        # 3. 아직 부족하면 다음 질문
-        question = call_llm_next_question(client, state)
-        print("\nAI:", question)
+        if state.questions_asked >= MAX_QUESTIONS:
+            run_matching_and_print(client, state, df, used_defaults=True)
+            state.finished = True
+            break
+
+        next_question = ask_next_question(state)
+        if next_question is None:
+            run_matching_and_print(
+                client, state, df, used_defaults=not has_enough_info(state.structured)
+            )
+            state.finished = True
+            break
+
+        print(f"\nAI ({state.questions_asked}/{MAX_QUESTIONS}):", next_question)
 
 
 # ==========================
