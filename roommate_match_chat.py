@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, Tuple, List
 
 import pandas as pd
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types  # pip install google-genai
 
 
@@ -218,20 +219,58 @@ class ChatState:
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 
+def normalize_api_key(api_key: str) -> str:
+    return api_key.strip().strip('"').strip("'").strip()
+
+
 def resolve_gemini_api_key() -> str:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if api_key:
-        return api_key
+    api_key: Optional[str] = None
+
     try:
         import streamlit as st
 
-        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
-            return st.secrets["GEMINI_API_KEY"]
+        api_key = st.session_state.get("gemini_api_key")
+        if not api_key and hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+            api_key = st.secrets["GEMINI_API_KEY"]
     except Exception:
         pass
+
+    if not api_key:
+        api_key = os.getenv("GEMINI_API_KEY")
+
+    if api_key:
+        return normalize_api_key(api_key)
+
     raise RuntimeError(
-        "GEMINI_API_KEY가 없습니다. 환경 변수 또는 Streamlit Secrets에 설정해주세요."
+        "GEMINI_API_KEY가 없습니다. .env 파일, 환경 변수, 또는 웹 화면 사이드바에 키를 입력해주세요."
     )
+
+
+def validate_gemini_api_key(api_key: str) -> Tuple[bool, str]:
+    """키 형식·연결을 간단히 검사. (성공, 오류 메시지)"""
+    key = normalize_api_key(api_key)
+    if not key:
+        return False, "API 키가 비어 있습니다."
+    if not key.startswith("AIza"):
+        return False, "Gemini API 키는 보통 'AIza'로 시작합니다. 키를 다시 확인해주세요."
+
+    try:
+        client = genai.Client(api_key=key)
+        client.models.generate_content(
+            model=DEFAULT_GEMINI_MODEL,
+            contents="ping",
+        )
+        return True, ""
+    except genai_errors.ClientError as exc:
+        err = str(exc)
+        if "API_KEY_INVALID" in err or "API key not valid" in err:
+            return (
+                False,
+                "API 키가 유효하지 않습니다. Google AI Studio에서 새 키를 발급해주세요.",
+            )
+        return False, f"Gemini API 오류: {exc}"
+    except Exception as exc:
+        return False, f"연결 확인 실패: {exc}"
 
 
 def get_gemini_client() -> genai.Client:
@@ -250,11 +289,20 @@ def gemini_generate(
     if json_response:
         config_kwargs["response_mime_type"] = "application/json"
 
-    response = client.models.generate_content(
-        model=model_name,
-        contents=user_prompt,
-        config=types.GenerateContentConfig(**config_kwargs),
-    )
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(**config_kwargs),
+        )
+    except genai_errors.ClientError as exc:
+        err = str(exc)
+        if "API_KEY_INVALID" in err or "API key not valid" in err:
+            raise RuntimeError(
+                "Gemini API 키가 유효하지 않습니다. "
+                "사이드바에서 새 키를 입력하거나 .env / 환경 변수를 확인해주세요."
+            ) from exc
+        raise
     return (response.text or "").strip()
 
 

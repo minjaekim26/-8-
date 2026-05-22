@@ -6,15 +6,36 @@
 
 Windows에서 `streamlit` 명령이 안 될 수 있습니다. **`python -m streamlit`** 을 사용하세요.
 
-### 방법 1: 실행 스크립트 (권장)
+### API 키 발급
+
+1. https://aistudio.google.com/apikey 접속
+2. **Create API key** → `AIza...` 로 시작하는 키 복사
+3. 아래 방법 중 하나로 설정 (채팅에 키를 올리지 마세요)
+
+### 방법 1: 웹 화면에서 입력 (가장 쉬움)
 
 ```powershell
 cd C:\Users\selen\Projects\-8-
-$env:GEMINI_API_KEY = "your-api-key"
-.\run.ps1
+python -m streamlit run app.py
 ```
 
-또는 `.env` 파일을 만들고 (`GEMINI_API_KEY=키`) `run.bat` 더블클릭.
+브라우저 **왼쪽 사이드바** → `GEMINI_API_KEY` 입력 → **키 저장 및 연결**
+
+### 방법 2: .env 파일
+
+프로젝트 폴더에 `.env` 파일 생성:
+
+```
+GEMINI_API_KEY=AIza여기에실제키
+```
+
+### 방법 3: 실행 스크립트
+
+```powershell
+cd C:\Users\selen\Projects\-8-
+$env:GEMINI_API_KEY = "AIza여기에실제키"
+.\run.ps1
+```
 
 ### 방법 2: 직접 실행
 
