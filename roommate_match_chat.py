@@ -218,11 +218,24 @@ class ChatState:
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 
-def get_gemini_client() -> genai.Client:
+def resolve_gemini_api_key() -> str:
     api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("환경변수 GEMINI_API_KEY를 설정해주세요.")
-    return genai.Client(api_key=api_key)
+    if api_key:
+        return api_key
+    try:
+        import streamlit as st
+
+        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+            return st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        pass
+    raise RuntimeError(
+        "GEMINI_API_KEY가 없습니다. 환경 변수 또는 Streamlit Secrets에 설정해주세요."
+    )
+
+
+def get_gemini_client() -> genai.Client:
+    return genai.Client(api_key=resolve_gemini_api_key())
 
 
 def gemini_generate(
@@ -531,9 +544,8 @@ def build_filters(structured: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     return structured["filters"].copy()
 
 
-def print_profile_summary(state: ChatState) -> None:
+def format_profile_summary(state: ChatState) -> str:
     prof = state.structured["profile"]
-    print("\n=== 입력하신 본인 정보 ===")
     labels = {
         "Gender": "성별",
         "Age": "나이",
@@ -543,26 +555,46 @@ def print_profile_summary(state: ChatState) -> None:
         "Noise_Sensitivity": "소음 민감도",
     }
     smoking_txt = {0: "비흡연", 1: "흡연"}
+    lines = ["### 입력하신 본인 정보"]
     for key, label in labels.items():
         val = prof.get(key, "-")
         if key == "Smoking" and val in smoking_txt:
             val = smoking_txt[val]
-        print(f"  - {label}: {val}")
-    print()
+        lines.append(f"- **{label}**: {val}")
+    return "\n".join(lines)
 
 
-def run_matching_and_print(
+def print_profile_summary(state: ChatState) -> None:
+    print("\n" + format_profile_summary(state).replace("### ", "=== ").replace("**", "") + "\n")
+
+
+MATCH_RESULT_COLUMNS = [
+    "Person ID",
+    "Gender",
+    "Age",
+    "Smoking",
+    "Cleaning_Habit",
+    "Eating_in_Room",
+    "Noise_Sensitivity",
+    "Sleep Duration",
+    "Daily Steps",
+    "match_score",
+]
+
+
+def run_matching_results(
     client: genai.Client,
     state: ChatState,
     df: pd.DataFrame,
     *,
     used_defaults: bool = False,
-) -> None:
+) -> Tuple[pd.DataFrame, str, Optional[str]]:
+    notice = None
     if used_defaults:
         apply_defaults(state)
-        print(
-            f"\n(안내) 질문은 최대 {MAX_QUESTIONS}개까지만 진행합니다. "
-            "아직 입력되지 않은 항목은 기본값으로 채워 매칭했습니다.\n"
+        notice = (
+            f"질문은 최대 {MAX_QUESTIONS}개까지만 진행합니다. "
+            "아직 입력되지 않은 항목은 기본값으로 채워 매칭했습니다."
         )
 
     user_profile = build_user_profile(state.structured)
@@ -576,23 +608,26 @@ def run_matching_and_print(
         filters=filters,
         top_n=5,
     )
-
     explanation = call_llm_explain_results(client, state, matches)
+    return matches[MATCH_RESULT_COLUMNS], explanation, notice
+
+
+def run_matching_and_print(
+    client: genai.Client,
+    state: ChatState,
+    df: pd.DataFrame,
+    *,
+    used_defaults: bool = False,
+) -> None:
+    matches, explanation, notice = run_matching_results(
+        client, state, df, used_defaults=used_defaults
+    )
+    if notice:
+        print(f"\n(안내) {notice}\n")
     print("\n=== 매칭 결과 설명 ===")
     print(explanation)
     print("\n=== 상위 후보 리스트(요약) ===")
-    print(matches[[
-        "Person ID",
-        "Gender",
-        "Age",
-        "Smoking",
-        "Cleaning_Habit",
-        "Eating_in_Room",
-        "Noise_Sensitivity",
-        "Sleep Duration",
-        "Daily Steps",
-        "match_score",
-    ]])
+    print(matches)
 
 
 def chat_loop(df: pd.DataFrame) -> None:
