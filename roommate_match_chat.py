@@ -160,28 +160,44 @@ def find_best_matches_for_user(
 # ==========================
 
 MAX_QUESTIONS = 10
+PHASE_PROFILE = "profile"
+PHASE_MATCHING = "matching"
 
-# 수집 순서(앞에서부터 하나씩만 질문)
-FIELD_ORDER: List[str] = [
+# 1단계: 본인 정보 (우선 수집)
+PROFILE_FIELD_ORDER: List[str] = [
     "Gender",
     "Age",
     "Smoking",
     "Cleaning_Habit",
     "Eating_in_Room",
     "Noise_Sensitivity",
+]
+
+# 2단계: 룸메이트 매칭용 추가 질문 (선호·필터·중요도)
+MATCHING_FIELD_ORDER: List[str] = [
+    "filter_Gender",
+    "filter_Smoking",
+    "filter_Age",
     "weight_smoking",
     "weight_cleaning",
+    "weight_noise",
 ]
 
 FIELD_QUESTIONS: Dict[str, str] = {
-    "Gender": "먼저 본인의 성별을 알려주실 수 있을까요? (남성/여성)",
-    "Age": "나이는 어떻게 되시나요?",
-    "Smoking": "흡연을 하시나요? (비흡연 / 흡연)",
-    "Cleaning_Habit": "평소 청소는 얼마나 자주 하시나요? (매일 / 주 2~3회 / 주 1회 / 거의 안 함)",
-    "Eating_in_Room": "방 안에서 음식을 드시는 편인가요? (불가 / 간식·음료 / 배달·식사까지)",
-    "Noise_Sensitivity": "소음에 대한 민감도는 어느 정도인가요? (1=둔감 ~ 5=매우 예민)",
-    "weight_smoking": "룸메이트의 흡연 여부가 얼마나 중요하신가요? (1=별로 안 중요 ~ 5=매우 중요)",
-    "weight_cleaning": "룸메이트의 청소 습관이 얼마나 중요하신가요? (1=별로 안 중요 ~ 5=매우 중요)",
+    # --- 본인 정보 ---
+    "Gender": "[본인 정보 1/6] 성별을 알려주세요. (남성/여성)",
+    "Age": "[본인 정보 2/6] 나이는 어떻게 되시나요?",
+    "Smoking": "[본인 정보 3/6] 본인은 흡연을 하시나요? (비흡연 / 흡연)",
+    "Cleaning_Habit": "[본인 정보 4/6] 평소 청소는 얼마나 자주 하시나요? (매일 / 주 2~3회 / 주 1회 / 거의 안 함)",
+    "Eating_in_Room": "[본인 정보 5/6] 방 안에서 음식을 드시는 편인가요? (불가 / 간식·음료 / 배달·식사까지)",
+    "Noise_Sensitivity": "[본인 정보 6/6] 소음에 대한 민감도는 어느 정도인가요? (1=둔감 ~ 5=매우 예민)",
+    # --- 룸메이트 선호 ---
+    "filter_Gender": "[매칭 선호 1/6] 선호하는 룸메이트 성별은? (남성 / 여성 / 상관없음)",
+    "filter_Smoking": "[매칭 선호 2/6] 룸메이트 흡연 여부 선호는? (비흡연만 / 흡연도 괜찮음 / 상관없음)",
+    "filter_Age": "[매칭 선호 3/6] 희망 룸메이트 나이대는? (예: 20~25, 23~27)",
+    "weight_smoking": "[매칭 선호 4/6] 룸메이트 흡연 여부가 얼마나 중요하신가요? (1~5)",
+    "weight_cleaning": "[매칭 선호 5/6] 룸메이트 청소 습관이 얼마나 중요하신가요? (1~5)",
+    "weight_noise": "[매칭 선호 6/6] 룸메이트와의 소음·생활 패턴이 얼마나 중요하신가요? (1~5)",
 }
 
 
@@ -193,6 +209,7 @@ class ChatState:
         "weights": {},
         "filters": {},
     })
+    phase: str = PHASE_PROFILE
     asked_fields: List[str] = field(default_factory=list)
     questions_asked: int = 0
     finished: bool = False
@@ -238,59 +255,38 @@ def call_llm_parse_answer(
     사용자의 자유 대답을 구조화된 JSON(profile/weights/filters)에 병합
     """
 
-    system_prompt = """
+    phase_hint = (
+        "현재 단계: 본인 정보(profile) 수집 중. profile에만 값을 채워."
+        if chat_state.phase == PHASE_PROFILE
+        else "현재 단계: 룸메이트 매칭 선호(filters/weights) 수집 중. filters와 weights에 값을 채워."
+    )
+
+    system_prompt = f"""
     너는 룸메이트 매칭을 돕는 비서야.
     사용자의 한국어 답변을 읽고, 아래 JSON 스키마에 맞게 구조화해서 출력해.
     출력은 반드시 JSON만, 다른 말 없이.
 
-    스키마 예시:
-    {
-      "profile": {
-        "Gender": "Male|Female|Other",
-        "Age": 25,
-        "Smoking": 0,
-        "Cleaning_Habit": 1,
-        "Eating_in_Room": 2,
-        "Noise_Sensitivity": 4,
-        "Sleep_Duration": 7.0,
-        "Daily_Steps": 6000
-      },
-      "weights": {
-        "smoking": 2.5,
-        "cleaning": 3.0,
-        "sleep_duration": 2.0,
-        "noise": 1.5,
-        "age": 1.5,
-        "daily_steps": 1.0,
-        "eating": 1.0
-      },
-      "filters": {
-        "Gender": "Male|Female|Any",
-        "Smoking": 0,
-        "Age_min": 20,
-        "Age_max": 30
-      }
-    }
+    {phase_hint}
+
+    스키마:
+    - profile: 사용자 본인 정보 (Gender, Age, Smoking, Cleaning_Habit, Eating_in_Room, Noise_Sensitivity, Sleep_Duration, Daily_Steps)
+    - weights: 매칭 시 중요도 (smoking, cleaning, noise, eating, age, sleep_duration, daily_steps) — 1~5를 0.5~3.0으로 스케일
+    - filters: 원하는 룸메이트 조건 (Gender: Male/Female/Any, Smoking: 0/1 또는 생략=상관없음, Age_min, Age_max)
 
     규칙:
     - 사용자가 말하지 않은 값은 JSON에서 생략해.
-    - 숫자로 해석 가능한 건 숫자로.
-    - "비흡연", "담배 안 피움" → Smoking = 0
-    - "흡연", "담배 피움" → Smoking = 1
-    - 청소 주기:
-      - "매일" → 0
-      - "주 2-3회" → 1
-      - "주 1회" → 2
-      - "거의 안 함" → 3
-    - 방 안 음식:
-      - "불가", "안 먹음" → 0
-      - "간식", "간단히" → 1
-      - "배달", "식사" → 2
-    - 소음 민감도: 1~5 숫자
-    - 중요도(가중치)는 1~5 사이 숫자를 받아서 0.5~3.0 범위로 스케일링해서 저장해도 좋아.
+    - profile.Smoking: "비흡연"→0, "흡연"→1
+    - profile.Cleaning_Habit: 매일→0, 주2-3회→1, 주1회→2, 거의안함→3
+    - profile.Eating_in_Room: 불가→0, 간식→1, 배달/식사→2
+    - filters.Gender: 남성→Male, 여성→Female, 상관없음→Any
+    - filters.Smoking: 비흡연만→0, 흡연도괜찮음→1
+    - filters.smoking_any: true → 흡연 여부 상관없음
+    - filters Age_min/Age_max: "20~25" 같은 표현 파싱
+    - weights.noise: 소음·생활패턴 중요도
     """
 
     user_prompt = (
+        f"현재 대화 단계: {chat_state.phase}\n"
         "지금까지의 구조화된 정보:\n"
         f"{json.dumps(chat_state.structured, ensure_ascii=False)}\n\n"
         "사용자 최신 답변:\n"
@@ -320,30 +316,65 @@ def call_llm_parse_answer(
 def _field_is_filled(structured: Dict[str, Dict[str, Any]], field_id: str) -> bool:
     prof = structured["profile"]
     weights = structured["weights"]
+    filters = structured["filters"]
 
+    if field_id in PROFILE_FIELD_ORDER:
+        return field_id in prof
+
+    if field_id == "filter_Gender":
+        return "Gender" in filters
+    if field_id == "filter_Smoking":
+        return "Smoking" in filters or filters.get("smoking_any") is True
+    if field_id == "filter_Age":
+        return "Age_min" in filters and "Age_max" in filters
     if field_id == "weight_smoking":
         return "smoking" in weights
     if field_id == "weight_cleaning":
         return "cleaning" in weights
-    return field_id in prof
+    if field_id == "weight_noise":
+        return "noise" in weights
+
+    return False
 
 
-def get_first_missing_field(structured: Dict[str, Dict[str, Any]]) -> Optional[str]:
-    """아직 채워지지 않은 필수 항목 중 우선순위가 가장 높은 항목."""
-    for field_id in FIELD_ORDER:
-        if not _field_is_filled(structured, field_id):
+def is_profile_complete(structured: Dict[str, Dict[str, Any]]) -> bool:
+    return all(_field_is_filled(structured, f) for f in PROFILE_FIELD_ORDER)
+
+
+def is_matching_complete(structured: Dict[str, Dict[str, Any]]) -> bool:
+    return all(_field_is_filled(structured, f) for f in MATCHING_FIELD_ORDER)
+
+
+def get_active_field_order(chat_state: ChatState) -> List[str]:
+    if chat_state.phase == PHASE_PROFILE:
+        return PROFILE_FIELD_ORDER
+    return MATCHING_FIELD_ORDER
+
+
+def get_first_missing_field(chat_state: ChatState) -> Optional[str]:
+    for field_id in get_active_field_order(chat_state):
+        if not _field_is_filled(chat_state.structured, field_id):
             return field_id
     return None
 
 
 def get_next_field_to_ask(chat_state: ChatState) -> Optional[str]:
-    """아직 없고, 아직 묻지 않은 항목 중 우선순위가 가장 높은 항목."""
-    for field_id in FIELD_ORDER:
+    for field_id in get_active_field_order(chat_state):
         if field_id in chat_state.asked_fields:
             continue
         if not _field_is_filled(chat_state.structured, field_id):
             return field_id
     return None
+
+
+def maybe_advance_phase(chat_state: ChatState) -> bool:
+    """본인 정보가 끝나면 매칭 단계로 전환. 전환 시 True."""
+    if chat_state.phase != PHASE_PROFILE:
+        return False
+    if not is_profile_complete(chat_state.structured):
+        return False
+    chat_state.phase = PHASE_MATCHING
+    return True
 
 
 def get_template_question(field_id: str) -> str:
@@ -419,14 +450,18 @@ def call_llm_explain_results(
 # 4. 대화 루프 (터미널용)
 # ==========================
 
-def has_enough_info(structured: Dict[str, Dict[str, Any]]) -> bool:
-    return get_first_missing_field(structured) is None
+def has_enough_info(chat_state: ChatState) -> bool:
+    return is_profile_complete(chat_state.structured) and is_matching_complete(
+        chat_state.structured
+    )
 
 
-def apply_defaults(structured: Dict[str, Dict[str, Any]]) -> None:
+def apply_defaults(chat_state: ChatState) -> None:
     """질문 상한에 도달했을 때 빠진 값을 기본값으로 채움."""
+    structured = chat_state.structured
     prof = structured["profile"]
     weights = structured["weights"]
+    filters = structured["filters"]
 
     profile_defaults = {
         "Gender": "Male",
@@ -437,6 +472,12 @@ def apply_defaults(structured: Dict[str, Dict[str, Any]]) -> None:
         "Noise_Sensitivity": 3,
         "Sleep_Duration": 7.0,
         "Daily_Steps": 5000,
+    }
+    filter_defaults = {
+        "Gender": "Any",
+        "Smoking": 0,
+        "Age_min": max(18, prof.get("Age", 25) - 3),
+        "Age_max": prof.get("Age", 25) + 3,
     }
     weight_defaults = {
         "smoking": 2.0,
@@ -450,6 +491,8 @@ def apply_defaults(structured: Dict[str, Dict[str, Any]]) -> None:
 
     for key, value in profile_defaults.items():
         prof.setdefault(key, value)
+    for key, value in filter_defaults.items():
+        filters.setdefault(key, value)
     for key, value in weight_defaults.items():
         weights.setdefault(key, value)
 
@@ -488,6 +531,26 @@ def build_filters(structured: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     return structured["filters"].copy()
 
 
+def print_profile_summary(state: ChatState) -> None:
+    prof = state.structured["profile"]
+    print("\n=== 입력하신 본인 정보 ===")
+    labels = {
+        "Gender": "성별",
+        "Age": "나이",
+        "Smoking": "흡연",
+        "Cleaning_Habit": "청소",
+        "Eating_in_Room": "방 안 음식",
+        "Noise_Sensitivity": "소음 민감도",
+    }
+    smoking_txt = {0: "비흡연", 1: "흡연"}
+    for key, label in labels.items():
+        val = prof.get(key, "-")
+        if key == "Smoking" and val in smoking_txt:
+            val = smoking_txt[val]
+        print(f"  - {label}: {val}")
+    print()
+
+
 def run_matching_and_print(
     client: genai.Client,
     state: ChatState,
@@ -496,7 +559,7 @@ def run_matching_and_print(
     used_defaults: bool = False,
 ) -> None:
     if used_defaults:
-        apply_defaults(state.structured)
+        apply_defaults(state)
         print(
             f"\n(안내) 질문은 최대 {MAX_QUESTIONS}개까지만 진행합니다. "
             "아직 입력되지 않은 항목은 기본값으로 채워 매칭했습니다.\n"
@@ -537,9 +600,9 @@ def chat_loop(df: pd.DataFrame) -> None:
     state = ChatState()
 
     print("안녕하세요! 성향 기반 룸메이트 매칭 도우미입니다.")
-    print(
-        f"최대 {MAX_QUESTIONS}가지 질문만 드리고, 겹치지 않게 필요한 정보만 물어볼게요.\n"
-    )
+    print("먼저 본인 정보를 받은 뒤, 룸메이트 선호 질문으로 매칭을 진행합니다.")
+    print(f"(질문은 최대 {MAX_QUESTIONS}개, 같은 내용은 반복하지 않습니다.)\n")
+    print("--- 1단계: 본인 정보 입력 ---\n")
 
     first_question = ask_next_question(state)
     if first_question:
@@ -561,7 +624,12 @@ def chat_loop(df: pd.DataFrame) -> None:
 
         call_llm_parse_answer(client, state, user_text)
 
-        if has_enough_info(state.structured):
+        if maybe_advance_phase(state):
+            print_profile_summary(state)
+            print("--- 2단계: 룸메이트 매칭 선호 입력 ---")
+            print("이제 원하시는 룸메이트 조건과 중요도를 물어볼게요.\n")
+
+        if has_enough_info(state):
             run_matching_and_print(client, state, df)
             state.finished = True
             break
@@ -573,13 +641,24 @@ def chat_loop(df: pd.DataFrame) -> None:
 
         next_question = ask_next_question(state)
         if next_question is None:
-            run_matching_and_print(
-                client, state, df, used_defaults=not has_enough_info(state.structured)
-            )
-            state.finished = True
-            break
+            if state.phase == PHASE_PROFILE and is_profile_complete(state.structured):
+                maybe_advance_phase(state)
+                print_profile_summary(state)
+                print("--- 2단계: 룸메이트 매칭 선호 입력 ---\n")
+                next_question = ask_next_question(state)
 
-        print(f"\nAI ({state.questions_asked}/{MAX_QUESTIONS}):", next_question)
+            if next_question is None:
+                run_matching_and_print(
+                    client, state, df, used_defaults=not has_enough_info(state)
+                )
+                state.finished = True
+                break
+
+        phase_label = "본인 정보" if state.phase == PHASE_PROFILE else "매칭 선호"
+        print(
+            f"\nAI [{phase_label}] ({state.questions_asked}/{MAX_QUESTIONS}):",
+            next_question,
+        )
 
 
 # ==========================
