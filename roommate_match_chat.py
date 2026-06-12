@@ -1,13 +1,10 @@
 import os
-import json
 import random
+import re
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Tuple, List
 
 import pandas as pd
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types  # pip install google-genai
 
 
 # ==========================
@@ -157,10 +154,10 @@ def find_best_matches_for_user(
 
 
 # ==========================
-# 3. LLM 연동 (Gemini API)
+# 3. 질문·답변 (API 없음)
 # ==========================
 
-MAX_QUESTIONS = 10
+MAX_MATCHING_QUESTIONS = 6
 PHASE_PROFILE = "profile"
 PHASE_MATCHING = "matching"
 
@@ -184,21 +181,31 @@ MATCHING_FIELD_ORDER: List[str] = [
     "weight_noise",
 ]
 
-FIELD_QUESTIONS: Dict[str, str] = {
-    # --- 본인 정보 ---
-    "Gender": "[본인 정보 1/6] 성별을 알려주세요. (남성/여성)",
-    "Age": "[본인 정보 2/6] 나이는 어떻게 되시나요?",
-    "Smoking": "[본인 정보 3/6] 본인은 흡연을 하시나요? (비흡연 / 흡연)",
-    "Cleaning_Habit": "[본인 정보 4/6] 평소 청소는 얼마나 자주 하시나요? (매일 / 주 2~3회 / 주 1회 / 거의 안 함)",
-    "Eating_in_Room": "[본인 정보 5/6] 방 안에서 음식을 드시는 편인가요? (불가 / 간식·음료 / 배달·식사까지)",
-    "Noise_Sensitivity": "[본인 정보 6/6] 소음에 대한 민감도는 어느 정도인가요? (1=둔감 ~ 5=매우 예민)",
-    # --- 룸메이트 선호 ---
-    "filter_Gender": "[매칭 선호 1/6] 선호하는 룸메이트 성별은? (남성 / 여성 / 상관없음)",
-    "filter_Smoking": "[매칭 선호 2/6] 룸메이트 흡연 여부 선호는? (비흡연만 / 흡연도 괜찮음 / 상관없음)",
-    "filter_Age": "[매칭 선호 3/6] 희망 룸메이트 나이대는? (예: 20~25, 23~27)",
-    "weight_smoking": "[매칭 선호 4/6] 룸메이트 흡연 여부가 얼마나 중요하신가요? (1~5)",
-    "weight_cleaning": "[매칭 선호 5/6] 룸메이트 청소 습관이 얼마나 중요하신가요? (1~5)",
-    "weight_noise": "[매칭 선호 6/6] 룸메이트와의 소음·생활 패턴이 얼마나 중요하신가요? (1~5)",
+PROFILE_FIELD_QUESTIONS: Dict[str, str] = {
+    "Gender": "성별을 알려주세요. (남성 / 여성)",
+    "Age": "나이는 어떻게 되시나요? (숫자)",
+    "Smoking": "흡연을 하시나요? (비흡연 / 흡연)",
+    "Cleaning_Habit": "청소는 얼마나 자주 하시나요? (매일 / 주2~3회 / 주1회 / 거의안함)",
+    "Eating_in_Room": "방 안 음식은? (불가 / 간식 / 배달)",
+    "Noise_Sensitivity": "소음 민감도? (1~5)",
+}
+
+MATCHING_FIELD_QUESTIONS: Dict[str, str] = {
+    "filter_Gender": "선호하는 룸메이트 **성별**은? (남성 / 여성 / 상관없음)",
+    "filter_Smoking": "룸메이트 **흡연 여부** 선호는? (비흡연만 / 흡연도 괜찮음 / 상관없음)",
+    "filter_Age": "희망 룸메이트 **나이대**는? (예: `20~25`, `23`)",
+    "weight_smoking": "룸메이트 **흡연 여부**가 얼마나 중요하신가요? (`1`~`5`)",
+    "weight_cleaning": "룸메이트 **청소 습관**이 얼마나 중요하신가요? (`1`~`5`)",
+    "weight_noise": "룸메이트와의 **소음·생활 패턴**이 얼마나 중요하신가요? (`1`~`5`)",
+}
+
+PROFILE_FORM_LABELS = {
+    "Gender": "성별",
+    "Age": "나이",
+    "Smoking": "흡연",
+    "Cleaning_Habit": "청소 습관",
+    "Eating_in_Room": "방 안 음식",
+    "Noise_Sensitivity": "소음 민감도",
 }
 
 
@@ -210,168 +217,182 @@ class ChatState:
         "weights": {},
         "filters": {},
     })
-    phase: str = PHASE_PROFILE
+    phase: str = PHASE_MATCHING
     asked_fields: List[str] = field(default_factory=list)
     questions_asked: int = 0
     finished: bool = False
 
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+def scale_importance(value: int) -> float:
+    value = max(1, min(5, value))
+    return round(0.5 + (value - 1) * 0.625, 2)
 
 
-def normalize_api_key(api_key: str) -> str:
-    return api_key.strip().strip('"').strip("'").strip()
-
-
-def resolve_gemini_api_key() -> str:
-    api_key: Optional[str] = None
-
-    try:
-        import streamlit as st
-
-        api_key = st.session_state.get("gemini_api_key")
-        if not api_key and hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
-            api_key = st.secrets["GEMINI_API_KEY"]
-    except Exception:
-        pass
-
-    if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY")
-
-    if api_key:
-        return normalize_api_key(api_key)
-
-    raise RuntimeError(
-        "GEMINI_API_KEY가 없습니다. .env 파일, 환경 변수, 또는 웹 화면 사이드바에 키를 입력해주세요."
-    )
-
-
-def validate_gemini_api_key(api_key: str) -> Tuple[bool, str]:
-    """키 형식·연결을 간단히 검사. (성공, 오류 메시지)"""
-    key = normalize_api_key(api_key)
-    if not key:
-        return False, "API 키가 비어 있습니다."
-    if not key.startswith("AIza"):
-        return False, "Gemini API 키는 보통 'AIza'로 시작합니다. 키를 다시 확인해주세요."
-
-    try:
-        client = genai.Client(api_key=key)
-        client.models.generate_content(
-            model=DEFAULT_GEMINI_MODEL,
-            contents="ping",
-        )
-        return True, ""
-    except genai_errors.ClientError as exc:
-        err = str(exc)
-        if "API_KEY_INVALID" in err or "API key not valid" in err:
-            return (
-                False,
-                "API 키가 유효하지 않습니다. Google AI Studio에서 새 키를 발급해주세요.",
-            )
-        return False, f"Gemini API 오류: {exc}"
-    except Exception as exc:
-        return False, f"연결 확인 실패: {exc}"
-
-
-def get_gemini_client() -> genai.Client:
-    return genai.Client(api_key=resolve_gemini_api_key())
-
-
-def gemini_generate(
-    client: genai.Client,
+def set_profile_from_form(
+    structured: Dict[str, Dict[str, Any]],
     *,
-    system_prompt: str,
-    user_prompt: str,
-    model_name: str = DEFAULT_GEMINI_MODEL,
-    json_response: bool = False,
-) -> str:
-    config_kwargs: Dict[str, Any] = {"system_instruction": system_prompt}
-    if json_response:
-        config_kwargs["response_mime_type"] = "application/json"
-
-    try:
-        response = client.models.generate_content(
-            model=model_name,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(**config_kwargs),
-        )
-    except genai_errors.ClientError as exc:
-        err = str(exc)
-        if "API_KEY_INVALID" in err or "API key not valid" in err:
-            raise RuntimeError(
-                "Gemini API 키가 유효하지 않습니다. "
-                "사이드바에서 새 키를 입력하거나 .env / 환경 변수를 확인해주세요."
-            ) from exc
-        raise
-    return (response.text or "").strip()
-
-
-def call_llm_parse_answer(
-    client: genai.Client,
-    chat_state: ChatState,
-    user_text: str,
-    model_name: str = DEFAULT_GEMINI_MODEL,
+    gender: str,
+    age: int,
+    smoking: int,
+    cleaning_habit: int,
+    eating_in_room: int,
+    noise_sensitivity: int,
 ) -> None:
-    """
-    사용자의 자유 대답을 구조화된 JSON(profile/weights/filters)에 병합
-    """
+    structured["profile"] = {
+        "Gender": gender,
+        "Age": int(age),
+        "Smoking": int(smoking),
+        "Cleaning_Habit": int(cleaning_habit),
+        "Eating_in_Room": int(eating_in_room),
+        "Noise_Sensitivity": int(noise_sensitivity),
+        "Sleep_Duration": 7.0,
+        "Daily_Steps": 5000,
+    }
 
-    phase_hint = (
-        "현재 단계: 본인 정보(profile) 수집 중. profile에만 값을 채워."
-        if chat_state.phase == PHASE_PROFILE
-        else "현재 단계: 룸메이트 매칭 선호(filters/weights) 수집 중. filters와 weights에 값을 채워."
-    )
 
-    system_prompt = f"""
-    너는 룸메이트 매칭을 돕는 비서야.
-    사용자의 한국어 답변을 읽고, 아래 JSON 스키마에 맞게 구조화해서 출력해.
-    출력은 반드시 JSON만, 다른 말 없이.
+def get_pending_field(chat_state: ChatState) -> Optional[str]:
+    for field_id in reversed(chat_state.asked_fields):
+        if not _field_is_filled(chat_state.structured, field_id):
+            return field_id
+    return None
 
-    {phase_hint}
 
-    스키마:
-    - profile: 사용자 본인 정보 (Gender, Age, Smoking, Cleaning_Habit, Eating_in_Room, Noise_Sensitivity, Sleep_Duration, Daily_Steps)
-    - weights: 매칭 시 중요도 (smoking, cleaning, noise, eating, age, sleep_duration, daily_steps) — 1~5를 0.5~3.0으로 스케일
-    - filters: 원하는 룸메이트 조건 (Gender: Male/Female/Any, Smoking: 0/1 또는 생략=상관없음, Age_min, Age_max)
+def parse_answer_rule(chat_state: ChatState, user_text: str) -> Tuple[bool, str]:
+    """규칙 기반 답변 파싱. (성공 여부, 안내 메시지)"""
+    field_id = get_pending_field(chat_state)
+    if field_id is None:
+        return False, "지금은 받을 질문이 없습니다."
 
-    규칙:
-    - 사용자가 말하지 않은 값은 JSON에서 생략해.
-    - profile.Smoking: "비흡연"→0, "흡연"→1
-    - profile.Cleaning_Habit: 매일→0, 주2-3회→1, 주1회→2, 거의안함→3
-    - profile.Eating_in_Room: 불가→0, 간식→1, 배달/식사→2
-    - filters.Gender: 남성→Male, 여성→Female, 상관없음→Any
-    - filters.Smoking: 비흡연만→0, 흡연도괜찮음→1
-    - filters.smoking_any: true → 흡연 여부 상관없음
-    - filters Age_min/Age_max: "20~25" 같은 표현 파싱
-    - weights.noise: 소음·생활패턴 중요도
-    """
+    text = user_text.strip()
+    lowered = text.lower()
+    structured = chat_state.structured
+    profile = structured["profile"]
+    filters = structured["filters"]
+    weights = structured["weights"]
 
-    user_prompt = (
-        f"현재 대화 단계: {chat_state.phase}\n"
-        "지금까지의 구조화된 정보:\n"
-        f"{json.dumps(chat_state.structured, ensure_ascii=False)}\n\n"
-        "사용자 최신 답변:\n"
-        f"{user_text}\n\n"
-        "이 답변을 반영해서 구조화된 JSON을 업데이트해줘."
-    )
+    if field_id == "Gender":
+        if any(k in lowered for k in ("남", "male")):
+            profile["Gender"] = "Male"
+            return True, ""
+        if any(k in lowered for k in ("여", "female")):
+            profile["Gender"] = "Female"
+            return True, ""
+        return False, "남성 / 여성 중 하나로 답해주세요."
 
-    json_text = gemini_generate(
-        client,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        model_name=model_name,
-        json_response=True,
-    )
-    try:
-        new_data = json.loads(json_text)
-    except json.JSONDecodeError:
-        # JSON 파싱 실패 시 무시
-        return
+    if field_id == "Age":
+        nums = [int(n) for n in re.findall(r"\d+", text)]
+        if nums:
+            profile["Age"] = nums[0]
+            return True, ""
+        return False, "나이를 숫자로 입력해주세요. (예: 23)"
 
-    # 병합
-    for section in ["profile", "weights", "filters"]:
-        if section in new_data and isinstance(new_data[section], dict):
-            chat_state.structured[section].update(new_data[section])
+    if field_id == "Smoking":
+        if any(k in lowered for k in ("비흡연", "안 피", "안피", "안해", "금연", "아니")):
+            profile["Smoking"] = 0
+            return True, ""
+        if any(k in lowered for k in ("흡연", "피움", "해요", "한다")):
+            profile["Smoking"] = 1
+            return True, ""
+        return False, "비흡연 / 흡연 중 하나로 답해주세요."
+
+    if field_id == "Cleaning_Habit":
+        if "매일" in lowered:
+            profile["Cleaning_Habit"] = 0
+            return True, ""
+        if "2" in lowered or "3" in lowered or "이삼" in lowered:
+            profile["Cleaning_Habit"] = 1
+            return True, ""
+        if "주1" in lowered or "한번" in lowered or "1회" in lowered:
+            profile["Cleaning_Habit"] = 2
+            return True, ""
+        if any(k in lowered for k in ("거의", "안 함", "안함", "안해")):
+            profile["Cleaning_Habit"] = 3
+            return True, ""
+        return False, "매일 / 주2~3회 / 주1회 / 거의안함 중 하나로 답해주세요."
+
+    if field_id == "Eating_in_Room":
+        if any(k in lowered for k in ("불가", "안 먹", "안먹")):
+            profile["Eating_in_Room"] = 0
+            return True, ""
+        if any(k in lowered for k in ("간식", "음료", "음료")):
+            profile["Eating_in_Room"] = 1
+            return True, ""
+        if any(k in lowered for k in ("배달", "식사")):
+            profile["Eating_in_Room"] = 2
+            return True, ""
+        return False, "불가 / 간식 / 배달 중 하나로 답해주세요."
+
+    if field_id == "Noise_Sensitivity":
+        noise_match = re.search(r"[1-5]", text)
+        if noise_match:
+            profile["Noise_Sensitivity"] = int(noise_match.group())
+            return True, ""
+        return False, "1~5 사이 숫자로 입력해주세요."
+
+    if field_id == "filter_Gender":
+        if any(k in lowered for k in ("남", "male")):
+            filters["Gender"] = "Male"
+            return True, ""
+        if any(k in lowered for k in ("여", "female")):
+            filters["Gender"] = "Female"
+            return True, ""
+        if any(k in lowered for k in ("상관", "무관", "any", "다")):
+            filters["Gender"] = "Any"
+            return True, ""
+        return False, "남성 / 여성 / 상관없음 중 하나로 답해주세요."
+
+    if field_id == "filter_Smoking":
+        if any(k in lowered for k in ("비흡연", "안 피", "안피", "금연")):
+            filters["Smoking"] = 0
+            filters.pop("smoking_any", None)
+            return True, ""
+        if any(k in lowered for k in ("괜찮", "흡연도", "상관없")) and "비흡연만" not in lowered:
+            if "상관" in lowered:
+                filters.pop("Smoking", None)
+                filters["smoking_any"] = True
+                return True, ""
+            filters["Smoking"] = 1
+            filters.pop("smoking_any", None)
+            return True, ""
+        if any(k in lowered for k in ("상관", "무관")):
+            filters.pop("Smoking", None)
+            filters["smoking_any"] = True
+            return True, ""
+        return False, "비흡연만 / 흡연도 괜찮음 / 상관없음 중 하나로 답해주세요."
+
+    if field_id == "filter_Age":
+        nums = [int(n) for n in re.findall(r"\d+", text)]
+        if len(nums) >= 2:
+            filters["Age_min"] = min(nums[0], nums[1])
+            filters["Age_max"] = max(nums[0], nums[1])
+            return True, ""
+        if len(nums) == 1:
+            center = nums[0]
+            filters["Age_min"] = max(18, center - 2)
+            filters["Age_max"] = center + 2
+            return True, ""
+        return False, "나이대를 숫자로 입력해주세요. (예: 20~25 또는 23)"
+
+    weight_match = re.search(r"[1-5]", text)
+    if field_id == "weight_smoking":
+        if weight_match:
+            weights["smoking"] = scale_importance(int(weight_match.group()))
+            return True, ""
+        return False, "1~5 사이 숫자로 중요도를 입력해주세요."
+
+    if field_id == "weight_cleaning":
+        if weight_match:
+            weights["cleaning"] = scale_importance(int(weight_match.group()))
+            return True, ""
+        return False, "1~5 사이 숫자로 중요도를 입력해주세요."
+
+    if field_id == "weight_noise":
+        if weight_match:
+            weights["noise"] = scale_importance(int(weight_match.group()))
+            return True, ""
+        return False, "1~5 사이 숫자로 중요도를 입력해주세요."
+
+    return False, "답변을 이해하지 못했습니다. 예시 형식대로 다시 입력해주세요."
 
 
 def _field_is_filled(structured: Dict[str, Dict[str, Any]], field_id: str) -> bool:
@@ -412,6 +433,12 @@ def get_active_field_order(chat_state: ChatState) -> List[str]:
     return MATCHING_FIELD_ORDER
 
 
+def start_matching_phase(chat_state: ChatState) -> None:
+    chat_state.phase = PHASE_MATCHING
+    chat_state.questions_asked = 0
+    chat_state.asked_fields = []
+
+
 def get_first_missing_field(chat_state: ChatState) -> Optional[str]:
     for field_id in get_active_field_order(chat_state):
         if not _field_is_filled(chat_state.structured, field_id):
@@ -438,73 +465,70 @@ def maybe_advance_phase(chat_state: ChatState) -> bool:
     return True
 
 
-def get_template_question(field_id: str) -> str:
-    return FIELD_QUESTIONS[field_id]
+def get_template_question(field_id: str, chat_state: ChatState) -> str:
+    if field_id in PROFILE_FIELD_ORDER:
+        return PROFILE_FIELD_QUESTIONS[field_id]
+    return MATCHING_FIELD_QUESTIONS[field_id]
 
 
 def ask_next_question(chat_state: ChatState) -> Optional[str]:
     """질문 1개 출력. 반환값은 질문 텍스트(없으면 None)."""
-    if chat_state.questions_asked >= MAX_QUESTIONS:
+    max_q = (
+        len(PROFILE_FIELD_ORDER)
+        if chat_state.phase == PHASE_PROFILE
+        else MAX_MATCHING_QUESTIONS
+    )
+    if chat_state.questions_asked >= max_q:
         return None
 
     field_id = get_next_field_to_ask(chat_state)
     if field_id is None:
         return None
 
-    question = get_template_question(field_id)
+    question = get_template_question(field_id, chat_state)
     chat_state.asked_fields.append(field_id)
     chat_state.questions_asked += 1
     return question
 
 
-def call_llm_explain_results(
-    client: genai.Client,
-    chat_state: ChatState,
-    matches: pd.DataFrame,
-    model_name: str = DEFAULT_GEMINI_MODEL,
-) -> str:
-    """
-    매칭 결과를 자연스럽게 요약/설명
-    """
+CLEANING_LABELS = {0: "매일", 1: "주 2~3회", 2: "주 1회", 3: "거의 안 함"}
+EATING_LABELS = {0: "불가", 1: "간식·음료", 2: "배달·식사"}
+SMOKING_LABELS = {0: "비흡연", 1: "흡연"}
 
-    system_prompt = """
-    너는 룸메이트 매칭 결과를 설명해주는 상담사야.
-    주어진 후보 리스트를 보고, 사용자의 성향과 어떤 점에서 잘 맞는지
-    친절하게 설명해줘.
 
-    규칙:
-    - 한국어, 존댓말
-    - 너무 긴 보고서 말고, 요약 + 간단한 이유를 1~3명 정도에 대해 설명
-    - 각 후보는 Person ID, 나이, 성별, 흡연 여부, 청소 습관, 방 안 음식, 소음 민감도, 매칭 점수 정보를 가짐
-    """
+def format_match_summary(state: ChatState, matches: pd.DataFrame) -> str:
+    lines = ["### 매칭 결과 요약", ""]
+    if matches.empty:
+        return "조건에 맞는 후보를 찾지 못했습니다. 필터 조건을 완화해 보세요."
 
-    matches_brief = matches[[
-        "Person ID",
-        "Gender",
-        "Age",
-        "Smoking",
-        "Cleaning_Habit",
-        "Eating_in_Room",
-        "Noise_Sensitivity",
-        "Sleep Duration",
-        "Daily Steps",
-        "match_score",
-    ]]
-
-    user_prompt = (
-        "사용자 성향(구조화 데이터):\n"
-        f"{json.dumps(chat_state.structured, ensure_ascii=False)}\n\n"
-        "추천된 후보 리스트(상위 몇 명):\n"
-        f"{matches_brief.to_json(orient='records', force_ascii=False)}\n\n"
-        "이 정보를 바탕으로, 어떤 후보가 어떤 이유로 잘 맞을지 요약해서 설명해줘."
+    user = state.structured["profile"]
+    lines.append(
+        f"입력하신 성향(흡연 {SMOKING_LABELS.get(user.get('Smoking'), '-')}, "
+        f"청소 {CLEANING_LABELS.get(user.get('Cleaning_Habit'), '-')})과 "
+        f"비교해 상위 후보를 추천합니다."
     )
+    lines.append("")
 
-    return gemini_generate(
-        client,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        model_name=model_name,
-    )
+    for _, row in matches.head(3).iterrows():
+        lines.append(f"**후보 #{int(row['Person ID'])}** · 점수 {row['match_score']:.1f}")
+        lines.append(
+            f"- {row['Gender']}, {int(row['Age'])}세, "
+            f"흡연 {SMOKING_LABELS.get(int(row['Smoking']), '-')}, "
+            f"청소 {CLEANING_LABELS.get(int(row['Cleaning_Habit']), '-')}, "
+            f"소음 민감도 {int(row['Noise_Sensitivity'])}"
+        )
+        reasons = []
+        if user.get("Smoking") == row["Smoking"]:
+            reasons.append("흡연 성향 일치")
+        if abs(user.get("Cleaning_Habit", 1) - row["Cleaning_Habit"]) <= 1:
+            reasons.append("청소 습관 유사")
+        if abs(user.get("Noise_Sensitivity", 3) - row["Noise_Sensitivity"]) <= 1:
+            reasons.append("소음 민감도 비슷")
+        if reasons:
+            lines.append(f"- 잘 맞는 점: {', '.join(reasons)}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 # ==========================
@@ -602,12 +626,14 @@ def format_profile_summary(state: ChatState) -> str:
         "Eating_in_Room": "방 안 음식",
         "Noise_Sensitivity": "소음 민감도",
     }
-    smoking_txt = {0: "비흡연", 1: "흡연"}
+    gender_txt = {"Male": "남성", "Female": "여성"}
     lines = ["### 입력하신 본인 정보"]
     for key, label in labels.items():
         val = prof.get(key, "-")
-        if key == "Smoking" and val in smoking_txt:
-            val = smoking_txt[val]
+        if key == "Gender" and val in gender_txt:
+            val = gender_txt[val]
+        if key == "Smoking" and val in SMOKING_LABELS:
+            val = SMOKING_LABELS[val]
         lines.append(f"- **{label}**: {val}")
     return "\n".join(lines)
 
@@ -631,7 +657,6 @@ MATCH_RESULT_COLUMNS = [
 
 
 def run_matching_results(
-    client: genai.Client,
     state: ChatState,
     df: pd.DataFrame,
     *,
@@ -641,8 +666,7 @@ def run_matching_results(
     if used_defaults:
         apply_defaults(state)
         notice = (
-            f"질문은 최대 {MAX_QUESTIONS}개까지만 진행합니다. "
-            "아직 입력되지 않은 항목은 기본값으로 채워 매칭했습니다."
+            "아직 입력되지 않은 매칭 선호 항목은 기본값으로 채워 매칭했습니다."
         )
 
     user_profile = build_user_profile(state.structured)
@@ -656,19 +680,18 @@ def run_matching_results(
         filters=filters,
         top_n=5,
     )
-    explanation = call_llm_explain_results(client, state, matches)
+    explanation = format_match_summary(state, matches)
     return matches[MATCH_RESULT_COLUMNS], explanation, notice
 
 
 def run_matching_and_print(
-    client: genai.Client,
     state: ChatState,
     df: pd.DataFrame,
     *,
     used_defaults: bool = False,
 ) -> None:
     matches, explanation, notice = run_matching_results(
-        client, state, df, used_defaults=used_defaults
+        state, df, used_defaults=used_defaults
     )
     if notice:
         print(f"\n(안내) {notice}\n")
@@ -679,21 +702,14 @@ def run_matching_and_print(
 
 
 def chat_loop(df: pd.DataFrame) -> None:
-    client = get_gemini_client()
-    state = ChatState()
+    state = ChatState(phase=PHASE_PROFILE)
 
-    print("안녕하세요! 성향 기반 룸메이트 매칭 도우미입니다.")
-    print("먼저 본인 정보를 받은 뒤, 룸메이트 선호 질문으로 매칭을 진행합니다.")
-    print(f"(질문은 최대 {MAX_QUESTIONS}개, 같은 내용은 반복하지 않습니다.)\n")
+    print("안녕하세요! 성향 기반 룸메이트 매칭 도우미입니다. (API 없음)")
     print("--- 1단계: 본인 정보 입력 ---\n")
 
     first_question = ask_next_question(state)
     if first_question:
         print("AI:", first_question)
-    else:
-        run_matching_and_print(client, state, df)
-        state.finished = True
-        return
 
     while not state.finished:
         try:
@@ -705,20 +721,32 @@ def chat_loop(df: pd.DataFrame) -> None:
         if not user_text:
             continue
 
-        call_llm_parse_answer(client, state, user_text)
+        ok, hint = parse_answer_rule(state, user_text)
+        if not ok:
+            print(f"AI: {hint}")
+            continue
 
         if maybe_advance_phase(state):
             print_profile_summary(state)
-            print("--- 2단계: 룸메이트 매칭 선호 입력 ---")
-            print("이제 원하시는 룸메이트 조건과 중요도를 물어볼게요.\n")
+            print("--- 2단계: 룸메이트 매칭 선호 입력 ---\n")
+            start_matching_phase(state)
+            q = ask_next_question(state)
+            if q:
+                print("AI:", q)
+            continue
 
         if has_enough_info(state):
-            run_matching_and_print(client, state, df)
+            run_matching_and_print(state, df)
             state.finished = True
             break
 
-        if state.questions_asked >= MAX_QUESTIONS:
-            run_matching_and_print(client, state, df, used_defaults=True)
+        max_q = (
+            len(PROFILE_FIELD_ORDER)
+            if state.phase == PHASE_PROFILE
+            else MAX_MATCHING_QUESTIONS
+        )
+        if state.questions_asked >= max_q:
+            run_matching_and_print(state, df, used_defaults=True)
             state.finished = True
             break
 
@@ -726,22 +754,20 @@ def chat_loop(df: pd.DataFrame) -> None:
         if next_question is None:
             if state.phase == PHASE_PROFILE and is_profile_complete(state.structured):
                 maybe_advance_phase(state)
+                start_matching_phase(state)
                 print_profile_summary(state)
                 print("--- 2단계: 룸메이트 매칭 선호 입력 ---\n")
                 next_question = ask_next_question(state)
 
             if next_question is None:
                 run_matching_and_print(
-                    client, state, df, used_defaults=not has_enough_info(state)
+                    state, df, used_defaults=not has_enough_info(state)
                 )
                 state.finished = True
                 break
 
         phase_label = "본인 정보" if state.phase == PHASE_PROFILE else "매칭 선호"
-        print(
-            f"\nAI [{phase_label}] ({state.questions_asked}/{MAX_QUESTIONS}):",
-            next_question,
-        )
+        print(f"\nAI [{phase_label}]:", next_question)
 
 
 # ==========================
