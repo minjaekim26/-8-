@@ -3,10 +3,12 @@ from pathlib import Path
 import streamlit as st
 
 from roommate_match_chat import (
+    CANDIDATES_FILE,
     MAX_MATCHING_QUESTIONS,
     PHASE_MATCHING,
     ChatState,
     ask_next_question,
+    ensure_candidate_pool,
     format_profile_summary,
     has_enough_info,
     is_matching_complete,
@@ -17,7 +19,7 @@ from roommate_match_chat import (
     start_matching_phase,
 )
 
-CSV_PATH = Path(__file__).parent / "Sleep_health_and_lifestyle_dataset.csv"
+DATA_DIR = Path(__file__).parent
 UI_FORM = "form"
 UI_CHAT = "chat"
 UI_DONE = "done"
@@ -35,7 +37,9 @@ def init_session() -> None:
         if key not in st.session_state:
             st.session_state[key] = value
     if "df" not in st.session_state:
-        st.session_state.df = load_dataset(str(CSV_PATH))
+        csv_path = ensure_candidate_pool(base_dir=str(DATA_DIR))
+        st.session_state.df = load_dataset(csv_path)
+        st.session_state.candidate_count = len(st.session_state.df)
 
 
 def reset_all() -> None:
@@ -161,6 +165,8 @@ def render_profile_form() -> None:
 def render_sidebar(state: ChatState) -> None:
     st.sidebar.header("룸메이트 매칭")
     st.sidebar.caption("API 없이 동작합니다")
+    if st.session_state.get("candidate_count"):
+        st.sidebar.metric("후보 풀", f"{st.session_state.candidate_count:,}명")
 
     phase_labels = {
         UI_FORM: "1단계 · 본인 정보 (폼)",
@@ -209,8 +215,9 @@ def render_chat() -> None:
 def main() -> None:
     st.set_page_config(page_title="룸메이트 매칭", page_icon="🏠", layout="wide")
 
-    if not CSV_PATH.exists():
-        st.error(f"데이터 파일이 없습니다: {CSV_PATH.name}")
+    base_csv = DATA_DIR / "Sleep_health_and_lifestyle_dataset.csv"
+    if not base_csv.exists() and not (DATA_DIR / CANDIDATES_FILE).exists():
+        st.error("데이터 파일이 없습니다. Sleep_health_and_lifestyle_dataset.csv 가 필요합니다.")
         st.stop()
 
     init_session()

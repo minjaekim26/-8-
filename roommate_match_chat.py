@@ -8,32 +8,145 @@ import pandas as pd
 
 
 # ==========================
-# 1. 데이터 로딩 + 확장 컬럼
+# 1. 데이터 로딩 + 후보 풀 생성
 # ==========================
 
-def add_roommate_features(df: pd.DataFrame) -> pd.DataFrame:
-    """룸메이트 성향 관련 가상 컬럼 추가"""
+BASE_DATASET_FILE = "Sleep_health_and_lifestyle_dataset.csv"
+CANDIDATES_FILE = "roommate_candidates.csv"
+DEFAULT_CANDIDATE_COUNT = 5000
 
+ROOMMATE_COLUMNS = ("Smoking", "Cleaning_Habit", "Eating_in_Room", "Noise_Sensitivity")
+SLEEP_DISORDER_CHOICES = ("None", "Insomnia", "Sleep Apnea")
+
+
+def add_roommate_features(df: pd.DataFrame, *, seed: Optional[int] = None) -> pd.DataFrame:
+    """룸메이트 성향 관련 가상 컬럼 추가"""
+    rng = random.Random(seed)
     num_rows = len(df)
 
-    # 흡연 여부 (0: 비흡연, 1: 흡연)
-    df["Smoking"] = [random.choices([0, 1], weights=[80, 20])[0] for _ in range(num_rows)]
-
-    # 청소 주기 (0: 매일, 1: 주 2-3회, 2: 주 1회, 3: 거의 안 함)
-    df["Cleaning_Habit"] = [random.randint(0, 3) for _ in range(num_rows)]
-
-    # 실내 취식 허용 범위 (0: 불가, 1: 음료/간식, 2: 배달음식까지)
-    df["Eating_in_Room"] = [random.randint(0, 2) for _ in range(num_rows)]
-
-    # 소음 민감도 (1: 둔감함 ~ 5: 매우 예민함)
-    df["Noise_Sensitivity"] = [random.randint(1, 5) for _ in range(num_rows)]
+    df["Smoking"] = [rng.choices([0, 1], weights=[80, 20])[0] for _ in range(num_rows)]
+    df["Cleaning_Habit"] = [rng.randint(0, 3) for _ in range(num_rows)]
+    df["Eating_in_Room"] = [rng.randint(0, 2) for _ in range(num_rows)]
+    df["Noise_Sensitivity"] = [rng.randint(1, 5) for _ in range(num_rows)]
 
     return df
 
 
-def load_dataset(csv_path: str) -> pd.DataFrame:
-    df = pd.read_csv(csv_path)
-    df = add_roommate_features(df)
+def _pick_blood_pressure(rng: random.Random) -> str:
+    systolic = rng.randint(110, 145)
+    diastolic = rng.randint(70, 95)
+    return f"{systolic}/{diastolic}"
+
+
+def generate_roommate_candidates(
+    base_csv: str,
+    output_csv: str,
+    count: int = DEFAULT_CANDIDATE_COUNT,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """원본 데이터 분포를 참고해 대량 후보 프로필 생성."""
+    base = pd.read_csv(base_csv)
+    occupations = base["Occupation"].dropna().unique().tolist()
+    bmi_categories = base["BMI Category"].dropna().unique().tolist()
+    rng = random.Random(seed)
+
+    rows: List[Dict[str, Any]] = []
+    for person_id in range(1, count + 1):
+        gender = rng.choices(["Male", "Female"], weights=[52, 48])[0]
+        age = rng.randint(19, 39)
+        occupation = rng.choice(occupations)
+
+        sleep_duration = round(rng.uniform(5.2, 8.8), 1)
+        quality = max(3, min(10, int(round(rng.gauss(6.5, 1.2)))))
+        activity = max(10, min(100, int(round(rng.gauss(45, 18)))))
+        stress = max(1, min(10, int(round(rng.gauss(5.5, 1.8)))))
+        daily_steps = max(1500, min(15000, int(round(rng.gauss(5500, 2200)))))
+
+        smoking = rng.choices([0, 1], weights=[78, 22])[0]
+        cleaning = rng.choices([0, 1, 2, 3], weights=[28, 34, 24, 14])[0]
+        eating = rng.choices([0, 1, 2], weights=[22, 48, 30])[0]
+        noise = rng.choices([1, 2, 3, 4, 5], weights=[8, 18, 34, 26, 14])[0]
+
+        disorder_roll = rng.random()
+        if disorder_roll < 0.12:
+            disorder = "Insomnia"
+        elif disorder_roll < 0.2:
+            disorder = "Sleep Apnea"
+        else:
+            disorder = "None"
+
+        rows.append(
+            {
+                "Person ID": person_id,
+                "Gender": gender,
+                "Age": age,
+                "Occupation": occupation,
+                "Sleep Duration": sleep_duration,
+                "Quality of Sleep": quality,
+                "Physical Activity Level": activity,
+                "Stress Level": stress,
+                "BMI Category": rng.choice(bmi_categories) if bmi_categories else "Normal",
+                "Blood Pressure": _pick_blood_pressure(rng),
+                "Heart Rate": rng.randint(62, 92),
+                "Daily Steps": daily_steps,
+                "Sleep Disorder": disorder,
+                "Smoking": smoking,
+                "Cleaning_Habit": cleaning,
+                "Eating_in_Room": eating,
+                "Noise_Sensitivity": noise,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    df.to_csv(output_csv, index=False)
+    return df
+
+
+def resolve_dataset_path(
+    preferred: Optional[str] = None,
+    *,
+    base_dir: Optional[str] = None,
+) -> str:
+    """확장 후보 풀이 있으면 우선 사용."""
+    root = base_dir or os.path.dirname(os.path.abspath(__file__))
+    candidates_path = os.path.join(root, CANDIDATES_FILE)
+    if preferred and os.path.exists(preferred):
+        return preferred
+    if os.path.exists(candidates_path):
+        return candidates_path
+    base_path = os.path.join(root, BASE_DATASET_FILE)
+    if os.path.exists(base_path):
+        return base_path
+    if preferred:
+        return preferred
+    return candidates_path
+
+
+def ensure_candidate_pool(
+    base_dir: Optional[str] = None,
+    count: int = DEFAULT_CANDIDATE_COUNT,
+) -> str:
+    """후보 CSV가 없으면 생성하고 경로 반환."""
+    root = base_dir or os.path.dirname(os.path.abspath(__file__))
+    candidates_path = os.path.join(root, CANDIDATES_FILE)
+    base_path = os.path.join(root, BASE_DATASET_FILE)
+
+    if not os.path.exists(candidates_path) and os.path.exists(base_path):
+        generate_roommate_candidates(base_path, candidates_path, count=count)
+
+    return resolve_dataset_path(base_dir=root)
+
+
+def load_dataset(csv_path: Optional[str] = None) -> pd.DataFrame:
+    path = csv_path or ensure_candidate_pool()
+    df = pd.read_csv(path)
+
+    if not all(col in df.columns for col in ROOMMATE_COLUMNS):
+        df = add_roommate_features(df, seed=42)
+
+    if "Sleep Disorder" in df.columns:
+        df["Sleep Disorder"] = df["Sleep Disorder"].fillna("None")
+
     return df
 
 
@@ -775,12 +888,10 @@ def chat_loop(df: pd.DataFrame) -> None:
 # ==========================
 
 if __name__ == "__main__":
-    # 이 이름이 실제 CSV 파일 이름과 같아야 합니다.
-    csv_path = "Sleep_health_and_lifestyle_dataset.csv"
-
+    csv_path = ensure_candidate_pool()
     if not os.path.exists(csv_path):
-        print(f"CSV 파일을 찾을 수 없습니다: {csv_path}")
-        print("경로를 코드 하단의 csv_path 변수에 맞게 수정하세요.")
+        print(f"데이터 파일을 찾을 수 없습니다: {csv_path}")
     else:
         df_extended = load_dataset(csv_path)
+        print(f"후보 풀: {len(df_extended)}명 로드 ({os.path.basename(csv_path)})")
         chat_loop(df_extended)

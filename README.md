@@ -1,6 +1,6 @@
 # 룸메이트 매칭
 
-성향 기반 룸메이트 매칭 (API 없음)
+성향 기반 룸메이트 매칭 (API 없음, 후보 5,000명)
 
 - **1단계:** 폼으로 본인 정보 입력
 - **2단계:** 채팅으로 룸메이트 선호·중요도 입력 (규칙 기반 파싱)
@@ -26,6 +26,14 @@ python -m streamlit run app.py
 1. https://share.streamlit.io → GitHub `minjaekim26/-8-`
 2. Main file: `app.py`
 3. Deploy (Secrets 없이 동작)
+
+## 후보 데이터 재생성
+
+```powershell
+python generate_candidates.py
+```
+
+`roommate_candidates.csv` (기본 5,000명)를 만듭니다. 앱은 이 파일을 우선 사용합니다.
 
 ## 터미널 버전
 
