@@ -1,0 +1,190 @@
+================================================================================
+  룸메이트 매칭 프로젝트 - 파일 설명 및 사용 관계
+  저장소: https://github.com/minjaekim26/-8-
+================================================================================
+
+[1] 전체 동작 흐름 (어떤 파일이 어떻게 연결되는지)
+--------------------------------------------------------------------------------
+
+  [사용자]
+     |
+     +-- 웹 실행 (streamlit) ---------> app.py
+     |                                      |
+     |                                      +--> roommate_match_chat.py (로직 import)
+     |                                      +--> roommate_candidates.csv (데이터 로드)
+     |
+     +-- 터미널 실행 -----------------> roommate_match_chat.py (직접 실행)
+     |                                      |
+     |                                      +--> roommate_candidates.csv
+     |
+     +-- 후보 데이터 생성 -------------> generate_candidates.py
+                                            |
+                                            +--> Sleep_health_and_lifestyle_dataset.csv (원본)
+                                            +--> roommate_candidates.csv (출력)
+
+
+[2] 핵심 실행 파일
+--------------------------------------------------------------------------------
+
+■ app.py
+  - 역할: Streamlit 웹 애플리케이션 (사용자가 브라우저로 접속하는 UI)
+  - 실행: python -m streamlit run app.py
+  - 하는 일:
+      1단계) st.form 으로 본인 정보(성별, 나이, 흡연, 청소, 음식, 소음) 입력
+      2단계) st.chat_input 으로 룸메이트 선호 6문항 채팅
+      3단계) 매칭 결과 표 + 요약 표시
+  - 사용하는 모듈: roommate_match_chat.py 에서 함수 import
+      (load_dataset, parse_answer_rule, run_matching_results 등)
+  - Streamlit Cloud 배포 시 Main file 로 지정하는 파일
+
+■ roommate_match_chat.py
+  - 역할: 프로젝트의 핵심 로직 (데이터, 매칭, 채팅 파싱, 터미널 루프)
+  - 실행: python roommate_match_chat.py  (터미널 전용 채팅 모드)
+  - 주요 구성:
+      [데이터]  load_dataset(), generate_roommate_candidates(), ensure_candidate_pool()
+      [매칭]    apply_filters(), match_score_weighted(), find_best_matches_for_user()
+      [채팅]    parse_answer_rule(), ask_next_question(), ChatState
+      [결과]    format_match_summary(), run_matching_results()
+      [터미널]  chat_loop()  -- 본인정보+선호 모두 채팅으로 수집
+  - app.py 와 터미널 모두 이 파일의 함수를 공유함
+
+■ generate_candidates.py
+  - 역할: 후보 5,000명 CSV 를 만드는 독립 스크립트
+  - 실행: python generate_candidates.py
+  - 입력: Sleep_health_and_lifestyle_dataset.csv (원본 374명, 직업·BMI 분포 참고)
+  - 출력: roommate_candidates.csv (5,000명 합성 프로필)
+  - 실제 생성 로직은 roommate_match_chat.py 의 generate_roommate_candidates() 사용
+
+
+[3] 데이터 파일
+--------------------------------------------------------------------------------
+
+■ roommate_candidates.csv  (약 5,000행)
+  - 역할: 매칭에 실제로 사용하는 확장 후보 풀
+  - 사용처: load_dataset() 이 이 파일을 우선 로드
+  - 포함 컬럼:
+      Person ID, Gender, Age, Occupation, Sleep Duration, Quality of Sleep,
+      Physical Activity Level, Stress Level, BMI Category, Blood Pressure,
+      Heart Rate, Daily Steps, Sleep Disorder,
+      Smoking, Cleaning_Habit, Eating_in_Room, Noise_Sensitivity
+  - 생성: generate_candidates.py 또는 앱 최초 실행 시 자동 생성
+
+■ Sleep_health_and_lifestyle_dataset.csv  (374행)
+  - 역할: Kaggle 기반 원본 시드 데이터
+  - 사용처:
+      - generate_candidates.py 가 직업·BMI 카테고리 분포 샘플링에 사용
+      - roommate_candidates.csv 가 없을 때 load_dataset() 의 fallback
+  - 룸메이트 전용 컬럼(Smoking 등)은 원본에 없음 → 로드 시 add_roommate_features() 로 추가 가능
+
+
+[4] 설정·실행 보조 파일
+--------------------------------------------------------------------------------
+
+■ requirements.txt
+  - 역할: pip 설치 패키지 목록
+  - 내용: pandas, streamlit
+  - 사용: pip install -r requirements.txt
+
+■ run.ps1
+  - 역할: Windows PowerShell 원클릭 웹 실행 스크립트
+  - 하는 일: requirements 설치 후 python -m streamlit run app.py
+  - 사용: .\run.ps1
+
+■ run.bat
+  - 역할: run.ps1 를 호출하는 배치 파일 (더블클릭 실행용)
+  - 사용: 탐색기에서 더블클릭
+
+■ .streamlit/config.toml
+  - 역할: Streamlit 앱 테마·서버 설정
+  - 사용: app.py 실행 시 자동 적용 (다크 테마, headless 서버)
+  - Streamlit Cloud 배포 시에도 동일 적용
+
+■ .gitignore
+  - 역할: Git 에 올리지 않을 파일 목록
+  - 제외 대상: __pycache__/, .env, venv/, .streamlit/secrets.toml 등
+
+■ .env.example
+  - 역할: 환경 변수 예시 (현재 프로젝트는 API 키 불필요)
+  - 참고: 과거 Gemini API 연동용이었으나 현재 미사용
+
+
+[5] 문서·분석 파일
+--------------------------------------------------------------------------------
+
+■ README.md
+  - 역할: 프로젝트 소개, 설치, 실행, 배포, FAQ
+  - GitHub 저장소 메인 페이지에 표시됨
+
+■ PROJECT_FILES.txt  (이 파일)
+  - 역할: 각 파일 설명 및 사용 관계 정리
+
+■ sleep-health-and-lifestyle.ipynb
+  - 역할: Jupyter 노트북 - 수면·건강 데이터 탐색(EDA) 및 전처리 예시
+  - 사용: Jupyter / VS Code 에서 직접 열어 분석 (앱 실행과 무관)
+  - 앱·매칭 엔진과는 독립적이나, 데이터 이해·확장 아이디어 참고용
+
+
+[6] 파일 간 import / 호출 관계 (상세)
+--------------------------------------------------------------------------------
+
+  app.py
+    |-- import roommate_match_chat
+    |     |-- ensure_candidate_pool()     → CSV 경로 결정, 없으면 생성
+    |     |-- load_dataset()              → roommate_candidates.csv 읽기
+    |     |-- set_profile_from_form()     → 1단계 폼 값 → profile 저장
+    |     |-- start_matching_phase()      → 2단계 채팅 시작
+    |     |-- ask_next_question()         → 다음 질문 템플릿
+    |     |-- parse_answer_rule()         → 채팅 답변 규칙 파싱 (API 없음)
+    |     |-- run_matching_results()      → 필터+점수 계산+요약
+    |     |-- format_profile_summary()    → 입력 정보 마크다운 요약
+
+  roommate_match_chat.py (터미널 직접 실행 시)
+    |-- ensure_candidate_pool()
+    |-- load_dataset()
+    |-- chat_loop()
+          |-- ask_next_question()         → 1단계 본인정보 6문항
+          |-- parse_answer_rule()
+          |-- maybe_advance_phase()       → 2단계 전환
+          |-- run_matching_and_print()    → 결과 출력
+
+  generate_candidates.py
+    |-- import generate_roommate_candidates from roommate_match_chat
+    |-- Sleep_health_and_lifestyle_dataset.csv → roommate_candidates.csv
+
+
+[7] 실행 방법 요약
+--------------------------------------------------------------------------------
+
+  [웹]
+    cd 프로젝트폴더
+    pip install -r requirements.txt
+    python -m streamlit run app.py
+    → http://localhost:8501
+
+  [터미널 채팅]
+    cd 프로젝트폴더
+    pip install -r requirements.txt
+    python roommate_match_chat.py
+
+  [후보 데이터 재생성]
+    python generate_candidates.py
+
+
+[8] Streamlit Cloud 배포 시 필요한 파일
+--------------------------------------------------------------------------------
+
+  필수:
+    - app.py                    (Main file)
+    - roommate_match_chat.py    (import 대상)
+    - roommate_candidates.csv   (후보 데이터)
+    - requirements.txt          (패키지)
+    - .streamlit/config.toml    (선택, 테마)
+
+  불필요:
+    - API 키 / Secrets
+    - run.ps1, run.bat          (로컬 전용)
+
+
+================================================================================
+  마지막 업데이트: 프로젝트 main 브랜치 기준 (API 없음, 후보 5,000명)
+================================================================================
