@@ -2,11 +2,14 @@ from pathlib import Path
 
 import streamlit as st
 
-from roommate_match_chat import (
-    CANDIDATES_FILE,
+from kci_research import (
     KCI_CITATION,
     KCI_FINDING_SUMMARY,
-    MAX_MATCHING_QUESTIONS,
+    get_kci_factor_display_df,
+    get_profile_happiness_level,
+    get_weights_chart_df,
+)
+from roommate_match_chat import (
     PHASE_MATCHING,
     ChatState,
     ask_next_question,
@@ -14,9 +17,6 @@ from roommate_match_chat import (
     build_weights,
     ensure_candidate_pool,
     format_profile_summary,
-    get_kci_factor_display_df,
-    get_profile_happiness_level,
-    get_weights_chart_df,
     has_enough_info,
     is_matching_complete,
     load_dataset,
