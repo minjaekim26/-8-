@@ -13,10 +13,55 @@ import pandas as pd
 
 BASE_DATASET_FILE = "Sleep_health_and_lifestyle_dataset.csv"
 CANDIDATES_FILE = "roommate_candidates.csv"
+KCI_RESEARCH_FILE = "kci_research_data.csv"
 DEFAULT_CANDIDATE_COUNT = 5000
 
 ROOMMATE_COLUMNS = ("Smoking", "Cleaning_Habit", "Eating_in_Room", "Noise_Sensitivity")
 SLEEP_DISORDER_CHOICES = ("None", "Insomnia", "Sleep Apnea")
+
+
+def estimate_happiness_level(
+    sleep_duration: float = 7.0,
+    quality: float = 6.5,
+    stress: float = 5.0,
+) -> float:
+    """수면·스트레스 기반 행복 수준 추정 (논문 7점 척도)."""
+    raw = (quality / 10) * 7 - (stress - 5) * 0.3 + (sleep_duration - 7) * 0.2
+    return round(max(1.0, min(7.0, raw)), 1)
+
+
+def compute_happiness_level(df: pd.DataFrame) -> pd.Series:
+    quality = df["Quality of Sleep"] if "Quality of Sleep" in df.columns else 6.5
+    stress = df["Stress Level"] if "Stress Level" in df.columns else 5
+    sleep = df["Sleep Duration"] if "Sleep Duration" in df.columns else 7.0
+    raw = (quality / 10) * 7 - (stress - 5) * 0.3 + (sleep - 7) * 0.2
+    return raw.clip(1, 7).round(1)
+
+
+def load_kci_research_weights(base_dir: Optional[str] = None) -> Dict[str, float]:
+    """KCI 논문(신지은 et al., 2017) 회귀계수 기반 기본 가중치."""
+    weights = {
+        "happiness": 3.0,
+        "smoking": 2.0,
+        "cleaning": 2.0,
+        "eating": 1.5,
+        "noise": 1.8,
+        "age": 1.2,
+        "sleep_duration": 1.2,
+        "daily_steps": 1.0,
+    }
+    root = base_dir or os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(root, KCI_RESEARCH_FILE)
+    if not os.path.exists(path):
+        return weights
+    try:
+        kci = pd.read_csv(path)
+        happy = kci.loc[kci["factor_id"] == "roommate_happiness", "regression_beta"]
+        if not happy.empty:
+            weights["happiness"] = round(max(2.5, float(happy.iloc[0]) * 7), 1)
+    except Exception:
+        pass
+    return weights
 
 
 def add_roommate_features(df: pd.DataFrame, *, seed: Optional[int] = None) -> pd.DataFrame:
@@ -28,6 +73,7 @@ def add_roommate_features(df: pd.DataFrame, *, seed: Optional[int] = None) -> pd
     df["Cleaning_Habit"] = [rng.randint(0, 3) for _ in range(num_rows)]
     df["Eating_in_Room"] = [rng.randint(0, 2) for _ in range(num_rows)]
     df["Noise_Sensitivity"] = [rng.randint(1, 5) for _ in range(num_rows)]
+    df["Happiness_Level"] = compute_happiness_level(df)
 
     return df
 
@@ -75,6 +121,8 @@ def generate_roommate_candidates(
         else:
             disorder = "None"
 
+        happiness = estimate_happiness_level(sleep_duration, quality, stress)
+
         rows.append(
             {
                 "Person ID": person_id,
@@ -94,6 +142,7 @@ def generate_roommate_candidates(
                 "Cleaning_Habit": cleaning,
                 "Eating_in_Room": eating,
                 "Noise_Sensitivity": noise,
+                "Happiness_Level": happiness,
             }
         )
 
@@ -146,6 +195,9 @@ def load_dataset(csv_path: Optional[str] = None) -> pd.DataFrame:
 
     if "Sleep Disorder" in df.columns:
         df["Sleep Disorder"] = df["Sleep Disorder"].fillna("None")
+
+    if "Happiness_Level" not in df.columns:
+        df["Happiness_Level"] = compute_happiness_level(df)
 
     return df
 
@@ -241,6 +293,21 @@ def match_score_weighted(
         score -= 2 * w["daily_steps"]
     elif diff_steps > 3000:
         score -= 1 * w["daily_steps"]
+
+    # 8. 행복 수준 (KCI: 기숙사 만족도 최강 예측 요인, β=0.41)
+    user_h = a.get("Happiness_Level", 5.0)
+    cand_h = b.get("Happiness_Level", 5.0)
+    diff_h = abs(user_h - cand_h)
+    if diff_h <= 0.5:
+        score += 2 * w.get("happiness", 3.0)
+    elif diff_h <= 1.0:
+        score += 1 * w.get("happiness", 3.0)
+    elif diff_h >= 2.5:
+        score -= 2 * w.get("happiness", 3.0)
+    elif diff_h >= 1.5:
+        score -= 1 * w.get("happiness", 3.0)
+    if cand_h >= 5.5:
+        score += 0.5 * w.get("happiness", 3.0)
 
     return score
 
@@ -620,15 +687,21 @@ def format_match_summary(state: ChatState, matches: pd.DataFrame) -> str:
         f"청소 {CLEANING_LABELS.get(user.get('Cleaning_Habit'), '-')})과 "
         f"비교해 상위 후보를 추천합니다."
     )
+    lines.append(
+        "_KCI 연구(신지은 et al., 2017)에 따라 룸메이트 행복 수준을 "
+        "가장 높은 가중치로 반영했습니다._"
+    )
     lines.append("")
 
     for _, row in matches.head(3).iterrows():
         lines.append(f"**후보 #{int(row['Person ID'])}** · 점수 {row['match_score']:.1f}")
+        happiness = row.get("Happiness_Level", "-")
         lines.append(
             f"- {row['Gender']}, {int(row['Age'])}세, "
             f"흡연 {SMOKING_LABELS.get(int(row['Smoking']), '-')}, "
             f"청소 {CLEANING_LABELS.get(int(row['Cleaning_Habit']), '-')}, "
-            f"소음 민감도 {int(row['Noise_Sensitivity'])}"
+            f"소음 민감도 {int(row['Noise_Sensitivity'])}, "
+            f"행복 수준 {happiness}"
         )
         reasons = []
         if user.get("Smoking") == row["Smoking"]:
@@ -637,6 +710,10 @@ def format_match_summary(state: ChatState, matches: pd.DataFrame) -> str:
             reasons.append("청소 습관 유사")
         if abs(user.get("Noise_Sensitivity", 3) - row["Noise_Sensitivity"]) <= 1:
             reasons.append("소음 민감도 비슷")
+        if "Happiness_Level" in row and abs(
+            user.get("Happiness_Level", 5) - row["Happiness_Level"]
+        ) <= 1:
+            reasons.append("행복 수준 유사")
         if reasons:
             lines.append(f"- 잘 맞는 점: {', '.join(reasons)}")
         lines.append("")
@@ -677,15 +754,7 @@ def apply_defaults(chat_state: ChatState) -> None:
         "Age_min": max(18, prof.get("Age", 25) - 3),
         "Age_max": prof.get("Age", 25) + 3,
     }
-    weight_defaults = {
-        "smoking": 2.0,
-        "cleaning": 2.0,
-        "eating": 1.5,
-        "noise": 2.0,
-        "age": 1.5,
-        "sleep_duration": 1.5,
-        "daily_steps": 1.0,
-    }
+    weight_defaults = load_kci_research_weights()
 
     for key, value in profile_defaults.items():
         prof.setdefault(key, value)
@@ -697,30 +766,29 @@ def apply_defaults(chat_state: ChatState) -> None:
 
 def build_user_profile(structured: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     prof = structured["profile"]
+    sleep_dur = prof.get("Sleep_Duration", 7.0)
+    quality = prof.get("Quality of Sleep", prof.get("Quality_of_Sleep", 6.5))
+    stress = prof.get("Stress Level", prof.get("Stress_Level", 5))
+    happiness = prof.get(
+        "Happiness_Level",
+        estimate_happiness_level(sleep_dur, quality, stress),
+    )
     user_profile = {
         "Smoking": prof["Smoking"],
         "Cleaning_Habit": prof["Cleaning_Habit"],
         "Eating_in_Room": prof.get("Eating_in_Room", 1),
         "Noise_Sensitivity": prof.get("Noise_Sensitivity", 3),
         "Age": prof["Age"],
-        "Sleep_Duration": prof.get("Sleep_Duration", 7.0),
+        "Sleep_Duration": sleep_dur,
         "Daily_Steps": prof.get("Daily_Steps", 5000),
+        "Happiness_Level": happiness,
     }
     return user_profile
 
 
 def build_weights(structured: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
     w = structured["weights"]
-    default_weights = {
-        "smoking": 2.0,
-        "cleaning": 2.0,
-        "eating": 1.5,
-        "noise": 2.0,
-        "age": 1.5,
-        "sleep_duration": 1.5,
-        "daily_steps": 1.0,
-    }
-    merged = default_weights.copy()
+    merged = load_kci_research_weights()
     merged.update(w)
     return merged
 
@@ -763,6 +831,7 @@ MATCH_RESULT_COLUMNS = [
     "Cleaning_Habit",
     "Eating_in_Room",
     "Noise_Sensitivity",
+    "Happiness_Level",
     "Sleep Duration",
     "Daily Steps",
     "match_score",

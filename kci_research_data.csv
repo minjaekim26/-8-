@@ -1,0 +1,5 @@
+factor_id,factor_name_ko,factor_name_en,study1_predicted_mean,study1_sd,study2_current_mean,study2_sd,study3_actual_mean,study3_sd,regression_beta,regression_p,significant,project_mapping
+facility,기본적 생활시설 상태,Basic dormitory facilities,5.37,1.16,5.47,1.36,4.66,1.65,0.14,0.10,marginal,not_in_current_model
+habit_match,룸메이트와의 생활 습관 일치성,Roommate lifestyle habit match,5.34,1.35,5.15,1.54,4.57,1.63,0.09,0.30,no,"Smoking,Cleaning_Habit,Eating_in_Room,Noise_Sensitivity"
+surroundings,주변 시설의 편리함,Surrounding facility convenience,5.19,1.29,5.12,1.47,4.51,1.45,0.16,0.10,marginal,not_in_current_model
+roommate_happiness,룸메이트가 얼마나 행복한 사람인지,How happy the roommate is,5.17,1.34,4.54,1.81,4.78,1.20,0.41,0.001,yes,Happiness_Level

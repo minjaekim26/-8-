@@ -12,10 +12,12 @@
      |                                      |
      |                                      +--> roommate_match_chat.py (로직 import)
      |                                      +--> roommate_candidates.csv (데이터 로드)
+     |                                      +--> kci_research_data.csv (가중치 기본값)
      |
      +-- 터미널 실행 -----------------> roommate_match_chat.py (직접 실행)
      |                                      |
      |                                      +--> roommate_candidates.csv
+     |                                      +--> kci_research_data.csv
      |
      +-- 후보 데이터 생성 -------------> generate_candidates.py
                                             |
@@ -42,10 +44,14 @@
   - 실행: python roommate_match_chat.py  (터미널 전용 채팅 모드)
   - 주요 구성:
       [데이터]  load_dataset(), generate_roommate_candidates(), ensure_candidate_pool()
+      [KCI]     load_kci_research_weights(), compute_happiness_level(),
+                estimate_happiness_level()  ← 논문 기반 가중치·행복 수준
       [매칭]    apply_filters(), match_score_weighted(), find_best_matches_for_user()
       [채팅]    parse_answer_rule(), ask_next_question(), ChatState
       [결과]    format_match_summary(), run_matching_results()
       [터미널]  chat_loop()  -- 본인정보+선호 모두 채팅으로 수집
+  - 매칭 점수: 생활 습관(흡연·청소·음식·소음) + 나이·수면·활동량 +
+               Happiness_Level(행복 수준, KCI 논문에서 최고 가중치)
   - app.py 와 터미널 모두 이 파일의 함수를 공유함
 
 ■ generate_candidates.py
@@ -66,8 +72,27 @@
       Person ID, Gender, Age, Occupation, Sleep Duration, Quality of Sleep,
       Physical Activity Level, Stress Level, BMI Category, Blood Pressure,
       Heart Rate, Daily Steps, Sleep Disorder,
-      Smoking, Cleaning_Habit, Eating_in_Room, Noise_Sensitivity
+      Smoking, Cleaning_Habit, Eating_in_Room, Noise_Sensitivity,
+      Happiness_Level (수면·스트레스 기반 1~7, KCI 논문 반영)
   - 생성: generate_candidates.py 또는 앱 최초 실행 시 자동 생성
+
+■ kci_research_data.csv
+  - 역할: KCI 논문(FI002229041)에서 추출한 4요인 수치·회귀계수 (기계 가독용)
+  - 출처: 신지은, 김정기, 서은국 (2017). 기숙사 만족도에 대한 예측 오류:
+          행복한 룸메이트의 과소평가된 가치. 한국심리학회지: 사회 및 성격, 31(2), 21-38.
+  - 주요 컬럼:
+      factor_id, factor_name_ko, study1_predicted_mean, study2_current_mean,
+      study3_actual_mean, regression_beta, regression_p, project_mapping
+  - 4요인:
+      facility(생활시설), habit_match(습관 일치), surroundings(주변 시설),
+      roommate_happiness(룸메이트 행복) ← 회귀 β=0.41, p<.001 (유일한 유의 예측 변수)
+  - 사용처: load_kci_research_weights() 가 regression_beta 를 읽어
+            happiness 가중치 등 기본값 설정 (파일 없으면 내장 기본값 사용)
+
+■ KCI_FI002229041_추출.txt
+  - 역할: PDF 논문 데이터 추출 요약 + 프로젝트 매핑 설명 (한국어, 사람이 읽기용)
+  - 내용: 연구 1~3 표 수치, 회귀분석 결과, 본 프로젝트 필드 매핑, 참고문헌
+  - 코드에서 직접 import 하지 않음 (문서·발표 참고용)
 
 ■ Sleep_health_and_lifestyle_dataset.csv  (374행)
   - 역할: Kaggle 기반 원본 시드 데이터
@@ -75,6 +100,26 @@
       - generate_candidates.py 가 직업·BMI 카테고리 분포 샘플링에 사용
       - roommate_candidates.csv 가 없을 때 load_dataset() 의 fallback
   - 룸메이트 전용 컬럼(Smoking 등)은 원본에 없음 → 로드 시 add_roommate_features() 로 추가 가능
+
+
+[3-1] KCI 논문 연동 요약
+--------------------------------------------------------------------------------
+
+  논문 핵심: 학생들은 「룸메이트 행복」을 덜 중요하다고 예측하지만,
+             실제 기숙사 만족도는 「룸메이트 행복」이 가장 잘 예측함 (β=0.41).
+
+  프로젝트 적용:
+    - habit_match(습관 일치)  → Smoking, Cleaning_Habit, Eating_in_Room, Noise_Sensitivity
+    - roommate_happiness      → Happiness_Level 컬럼 (수면의 질·스트레스·수면시간 → 1~7)
+    - facility, surroundings  → 현재 데이터 없음, 매칭 미포함
+
+  기본 가중치 (load_kci_research_weights):
+    happiness 2.9~3.0 (최고), smoking 2.0, cleaning 2.0, noise 1.8,
+    eating 1.5, age 1.2, sleep_duration 1.2, daily_steps 1.0
+
+  사용자 프로필의 Happiness_Level:
+    폼에서 직접 받지 않음 → Sleep_Duration·기본 수면/스트레스로 estimate_happiness_level() 추정
+    후보 CSV에는 Quality of Sleep, Stress Level 로 compute_happiness_level() 계산값 저장
 
 
 [4] 설정·실행 보조 파일
@@ -136,6 +181,8 @@
     |     |-- ask_next_question()         → 다음 질문 템플릿
     |     |-- parse_answer_rule()         → 채팅 답변 규칙 파싱 (API 없음)
     |     |-- run_matching_results()      → 필터+점수 계산+요약
+    |     |     |-- load_kci_research_weights()  → kci_research_data.csv
+    |     |     |-- match_score_weighted()       → Happiness_Level 포함 점수
     |     |-- format_profile_summary()    → 입력 정보 마크다운 요약
 
   roommate_match_chat.py (터미널 직접 실행 시)
@@ -176,9 +223,13 @@
   필수:
     - app.py                    (Main file)
     - roommate_match_chat.py    (import 대상)
-    - roommate_candidates.csv   (후보 데이터)
+    - roommate_candidates.csv   (후보 데이터, Happiness_Level 포함)
+    - kci_research_data.csv     (논문 기반 가중치; 없으면 내장 기본값)
     - requirements.txt          (패키지)
     - .streamlit/config.toml    (선택, 테마)
+
+  참고 (배포 불필요):
+    - KCI_FI002229041_추출.txt  (문서용, 앱 실행에 불필요)
 
   불필요:
     - API 키 / Secrets
@@ -238,9 +289,12 @@
    **5,000명의 합성 후보**를 `roommate_candidates.csv` 로 만들었습니다.
    각 후보에는 흡연, 청소, 방 안 음식, 소음 민감도 같은
    룸메이트 매칭용 컬럼이 들어 있습니다.
+   또한 KCI 논문(신지은 et al., 2017)을 반영해
+   **행복 수준(Happiness_Level)** 컬럼과 논문 기반 가중치를 적용했습니다.
 
    매칭 엔진은 `roommate_match_chat.py` 한 파일에 모여 있습니다.
-   필터로 1차 걸러내고, 가중치 점수로 순위를 매깁니다.
+   `kci_research_data.csv` 에서 논문 회귀계수를 읽어
+   룸메이트 행복 항목에 가장 높은 가중치를 줍니다.
 
    화면은 `app.py` 로 만든 **Streamlit 웹앱**입니다.
    1단계는 폼, 2단계는 채팅으로 나눴습니다."
@@ -274,7 +328,10 @@
 
    입력이 끝나면 **상위 5명**이 표로 나오고,
    왜 이 후보가 잘 맞는지 요약 설명도 함께 보여줍니다.
-   흡연 성향이 같다, 청소 습관이 비슷하다 같은 이유를 텍스트로 정리합니다."
+   흡연 성향이 같다, 청소 습관이 비슷하다, 행복 수준이 유사하다
+   같은 이유를 텍스트로 정리합니다.
+   KCI 연구에 따르면 룸메이트 행복이 기숙사 만족의 핵심 요인이라는 점도
+   결과 요약에 안내됩니다."
 
 
 --- 매칭 로직 설명 (1분) ---
@@ -286,9 +343,15 @@
    5,000명 중에서 그 조건에 맞는 사람만 남깁니다.
 
    그다음 **가중치 점수**입니다.
-   흡연, 청소, 방 안 음식, 소음, 나이 차이, 수면 시간, 활동량을
+   흡연, 청소, 방 안 음식, 소음, 나이 차이, 수면 시간, 활동량,
+   그리고 **행복 수준(Happiness_Level)** 을
    사용자 프로필과 후보를 하나씩 비교합니다.
    잘 맞으면 점수를 더하고, 많이 다르면 깎습니다.
+
+   가중치 기본값은 KCI 논문(신지은 et al., 2017) 회귀분석을 반영했습니다.
+   논문에서 기숙사 만족도를 가장 잘 예측한 것은
+   「룸메이트 행복」(β=0.41)이었기 때문에,
+   happiness 항목이 smoking·cleaning 보다 높은 가중치를 갖습니다.
 
    사용자가 '흡연이 매우 중요하다'고 하면
    흡연 항목의 가중치가 커져서, 흡연 불일치 시 점수 페널티도 커집니다.
@@ -304,7 +367,9 @@
    주요 파일은 다음과 같습니다.
    - `app.py` : 웹 UI
    - `roommate_match_chat.py` : 매칭·채팅·데이터 로딩
-   - `roommate_candidates.csv` : 5,000명 후보 데이터
+   - `roommate_candidates.csv` : 5,000명 후보 데이터 (Happiness_Level 포함)
+   - `kci_research_data.csv` : KCI 논문에서 추출한 가중치 근거 데이터
+   - `KCI_FI002229041_추출.txt` : 논문 수치·매핑 한국어 요약
    - `generate_candidates.py` : 후보 데이터 생성 스크립트
 
    터미널에서 `python roommate_match_chat.py` 를 실행하면
@@ -358,7 +423,12 @@
   Q. Streamlit Cloud 배포 시 뭘 설정하나요?
   A. Repository `minjaekim26/-8-`, Main file `app.py` 만 지정하면 됩니다.
 
+  Q. KCI 논문 데이터는 어떻게 쓰였나요?
+  A. 신지은 et al.(2017)에서 「룸메이트 행복」이 기숙사 만족의 핵심 예측 변수임을
+     반영해 Happiness_Level 컬럼과 happiness 가중치(최고)를 매칭에 적용했습니다.
+     상세 수치는 `kci_research_data.csv`, `KCI_FI002229041_추출.txt` 참고.
+
 
 ================================================================================
-  마지막 업데이트: 프로젝트 main 브랜치 기준 (API 없음, 후보 5,000명)
+  마지막 업데이트: KCI 논문(FI002229041) 연동, Happiness_Level, 가중치 반영
 ================================================================================
