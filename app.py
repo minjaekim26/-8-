@@ -10,6 +10,8 @@ from kci_research import (
     get_weights_chart_df,
 )
 from roommate_match_chat import (
+    CANDIDATES_FILE,
+    MAX_MATCHING_QUESTIONS,
     PHASE_MATCHING,
     ChatState,
     ask_next_question,
