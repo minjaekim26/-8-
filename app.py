@@ -4,12 +4,19 @@ import streamlit as st
 
 from roommate_match_chat import (
     CANDIDATES_FILE,
+    KCI_CITATION,
+    KCI_FINDING_SUMMARY,
     MAX_MATCHING_QUESTIONS,
     PHASE_MATCHING,
     ChatState,
     ask_next_question,
+    build_user_profile,
+    build_weights,
     ensure_candidate_pool,
     format_profile_summary,
+    get_kci_factor_display_df,
+    get_profile_happiness_level,
+    get_weights_chart_df,
     has_enough_info,
     is_matching_complete,
     load_dataset,
@@ -81,6 +88,8 @@ def finish_matching(*, used_defaults: bool = False) -> None:
         st.session_state.messages.append(("assistant", f"ℹ️ {notice}"))
     st.session_state.messages.append(("assistant", explanation))
     st.session_state.match_table = matches
+    st.session_state.applied_weights = build_weights(state.structured)
+    st.session_state.user_happiness = build_user_profile(state.structured)["Happiness_Level"]
     st.session_state.finished = True
     st.session_state.ui_phase = UI_DONE
     state.finished = True
@@ -114,6 +123,85 @@ def process_chat_turn(user_text: str) -> None:
             f"_매칭 선호 · {state.questions_asked}/{MAX_MATCHING_QUESTIONS}_\n\n{next_q}",
         )
     )
+
+
+def render_kci_research_panel(state: ChatState, *, expanded: bool = False) -> None:
+    """KCI 논문 반영 내용·가중치를 메인 영역에 표시."""
+    with st.expander("📚 KCI 논문 기반 매칭 로직", expanded=expanded):
+        st.markdown(f"**핵심 발견:** {KCI_FINDING_SUMMARY}")
+        st.caption(KCI_CITATION)
+
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.markdown("**논문 4요인 vs 프로젝트 매핑**")
+            factors = get_kci_factor_display_df(str(DATA_DIR))
+            if not factors.empty:
+                st.dataframe(factors, use_container_width=True, hide_index=True)
+            else:
+                st.info("kci_research_data.csv 를 찾을 수 없습니다.")
+
+        with col2:
+            st.markdown("**현재 적용 가중치**")
+            weights_df = get_weights_chart_df(state.structured, str(DATA_DIR))
+            st.bar_chart(weights_df.set_index("항목")["가중치"], horizontal=True)
+            st.caption(
+                "「룸메이트 행복」이 논문에서 유일한 유의 예측 변수(β=0.41)이므로 "
+                "가장 높은 가중치를 부여합니다. 채팅에서 중요도를 입력하면 해당 항목이 조정됩니다."
+            )
+
+        if state.structured.get("profile"):
+            happiness = get_profile_happiness_level(state.structured["profile"])
+            st.metric(
+                "본인 행복 수준 (추정, 1~7)",
+                f"{happiness}",
+                help="수면 시간·수면의 질·스트레스 기본값으로 추정. 후보는 CSV의 Happiness_Level 사용.",
+            )
+
+
+def render_kci_results_panel(state: ChatState) -> None:
+    """매칭 완료 후 논문 반영·점수 로직 상세."""
+    st.subheader("📊 논문 반영 · 점수 로직")
+    st.markdown(KCI_FINDING_SUMMARY)
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("본인 행복 수준", f"{st.session_state.get('user_happiness', '-')} / 7")
+    with c2:
+        top_w = st.session_state.get("applied_weights", {})
+        st.metric("최고 가중치 항목", "룸메이트 행복", f"{top_w.get('happiness', '-')}점")
+    with c3:
+        st.metric("후보 풀", f"{st.session_state.get('candidate_count', 0):,}명")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("**적용된 매칭 가중치**")
+        weights_df = get_weights_chart_df(state.structured, str(DATA_DIR))
+        st.bar_chart(weights_df.set_index("항목")["가중치"], horizontal=True)
+        st.dataframe(weights_df, use_container_width=True, hide_index=True)
+
+    with col_b:
+        st.markdown("**점수 계산 방식**")
+        st.markdown(
+            """
+| 항목 | 비교 방식 |
+|------|-----------|
+| **룸메이트 행복** | Happiness_Level 차이 (KCI 최고 가중치) |
+| 흡연 | 일치 시 가산, 불일치 시 큰 감점 |
+| 청소·음식·소음 | 습관 차이에 따라 가산/감점 |
+| 나이·수면·활동량 | 차이가 클수록 감점 |
+
+- 후보 **Happiness_Level**: 수면의 질·스트레스·수면시간으로 1~7 계산
+- 본인 **Happiness_Level**: 폼 입력 후 기본 수면값으로 추정
+            """
+        )
+
+    st.markdown("**논문 요인 데이터**")
+    st.dataframe(
+        get_kci_factor_display_df(str(DATA_DIR)),
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.caption(KCI_CITATION)
 
 
 def render_profile_form() -> None:
@@ -164,7 +252,8 @@ def render_profile_form() -> None:
 
 def render_sidebar(state: ChatState) -> None:
     st.sidebar.header("룸메이트 매칭")
-    st.sidebar.caption("API 없이 동작합니다")
+    st.sidebar.caption("API 없이 동작 · KCI 논문 가중치 반영")
+
     if st.session_state.get("candidate_count"):
         st.sidebar.metric("후보 풀", f"{st.session_state.candidate_count:,}명")
 
@@ -174,6 +263,14 @@ def render_sidebar(state: ChatState) -> None:
         UI_DONE: "완료",
     }
     st.sidebar.markdown(f"**현재:** {phase_labels.get(st.session_state.ui_phase, '-')}")
+
+    with st.sidebar.expander("📚 KCI 논문 요약", expanded=st.session_state.ui_phase == UI_DONE):
+        st.markdown(KCI_FINDING_SUMMARY)
+        if state.structured.get("profile"):
+            h = get_profile_happiness_level(state.structured["profile"])
+            st.metric("행복 수준 (추정)", f"{h} / 7")
+        wdf = get_weights_chart_df(state.structured, str(DATA_DIR))
+        st.bar_chart(wdf.set_index("항목")["가중치"], horizontal=True)
 
     if st.session_state.ui_phase == UI_CHAT:
         st.sidebar.progress(
@@ -203,8 +300,11 @@ def render_chat() -> None:
 
     if st.session_state.finished:
         if "match_table" in st.session_state:
-            st.subheader("상위 매칭 후보")
-            st.dataframe(st.session_state.match_table, use_container_width=True)
+            tab_matches, tab_kci = st.tabs(["상위 매칭 후보", "논문 반영 · 점수 로직"])
+            with tab_matches:
+                st.dataframe(st.session_state.match_table, use_container_width=True)
+            with tab_kci:
+                render_kci_results_panel(st.session_state.chat_state)
         return
 
     if prompt := st.chat_input("룸메이트 선호를 입력하세요..."):
@@ -225,7 +325,15 @@ def main() -> None:
     render_sidebar(state)
 
     st.title("🏠 룸메이트 매칭")
-    st.caption("폼으로 본인 정보 입력 → 채팅으로 룸메이트 선호 입력 (API 불필요)")
+    st.caption(
+        "폼으로 본인 정보 입력 → 채팅으로 룸메이트 선호 입력 · "
+        "KCI 논문(신지은 et al., 2017) 기반 가중치 적용"
+    )
+
+    render_kci_research_panel(
+        state,
+        expanded=st.session_state.ui_phase in (UI_FORM, UI_DONE),
+    )
 
     if st.session_state.ui_phase == UI_FORM:
         render_profile_form()
