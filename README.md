@@ -217,3 +217,33 @@ python generate_candidates.py
 - 매칭 로직: `roommate_match_chat.py`
 - 외부 LLM API 미사용 (과거 Gemini 연동 코드는 제거됨)
 - Windows 환경 기준으로 `run.ps1` 제공
+
+---  
+## 이론적 배경
+- 1. Similarity-Attraction Theory
+
+Similarity-Attraction Theory는 개인이 자신과 유사한 가치관, 태도, 성향을 가진 사람에게 더 높은 호감과 만족감을 느낀다고 설명하는 이론이다.
+
+Byrne(1971)는 유사성이 인간관계 형성과 관계 만족도에 중요한 영향을 미친다고 제시하였다.
+
+본 프로젝트는 해당 이론을 바탕으로 흡연 여부, 청소 습관, 음식 섭취 습관, 소음 민감도 등의 생활 습관 유사도를 계산하여 매칭 점수에 반영하였다.
+
+참고문헌:
+Byrne, D. (1971). The Attraction Paradigm. New York: Academic Press.
+
+- 2. Sleep Quality and Well-Being
+
+선행연구에서는 수면의 질과 수면 시간이 삶의 만족도, 정서적 안정, 주관적 안녕감과 밀접한 관련이 있는 것으로 보고된다.
+
+본 프로젝트는 수면 시간(Sleep Duration), 수면의 질(Quality of Sleep), 스트레스 수준(Stress Level)을 활용하여 Happiness_Level을 계산하였다.
+
+- 3. KCI 논문 적용
+
+신지은 · 김정기 · 서은국 (2017)
+
+「기숙사 만족도에 대한 예측 오류: 행복한 룸메이트의 과소평가된 가치」
+
+해당 연구에서는 룸메이트 행복 수준이 기숙사 만족도를 가장 잘 예측하는 변수(β=0.41)로 나타났다.
+
+본 프로젝트는 이를 반영하여 Happiness_Level에 가장 높은 가중치를 부여하였다.
+
