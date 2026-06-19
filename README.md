@@ -13,10 +13,13 @@ https://youtu.be/VZ1622BGEZo
 
 ## Pull Request
 
-| PR | 상태 | 링크 |
-|----|------|------|
-| **#2** | Open | https://github.com/minjaekim26/-8-/pull/2 |
-| **#1** (머지 완료) | Merged | https://github.com/minjaekim26/-8-/pull/1 |
+| PR | 제목 | 상태 | 링크 |
+|----|------|------|------|
+| **#3** | 실행 방법 가이드 (RUN_INSTRUCTIONS.txt) | **Merged** | https://github.com/minjaekim26/-8-/pull/3 |
+| **#2** | 룸메이트 매칭 시스템 및 KCI 논문 반영 (김민재) | **Merged** | https://github.com/minjaekim26/-8-/pull/2 |
+| **#1** | Update README.md | **Merged** | https://github.com/minjaekim26/-8-/pull/1 |
+
+> 모두 `main`에 머지 완료. GitHub **Pull requests → Closed** 탭에서 확인할 수 있습니다.
 
 - 상세 기록: `PR_RECORD.md`
 - **Cursor AI 프롬프트 기록:** `CURSOR_PROMPT_RECORD.md`

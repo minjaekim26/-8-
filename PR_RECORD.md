@@ -4,11 +4,12 @@
 
 | PR | 제목 | 상태 | 링크 |
 |----|------|------|------|
-| **#1** | Update README.md | **Merged** (머지 완료) | https://github.com/minjaekim26/-8-/pull/1 |
-| **#2** | 룸메이트 매칭 시스템 및 KCI 논문 반영 (김민재) | **Open** | https://github.com/minjaekim26/-8-/pull/2 |
+| **#3** | 실행 방법 가이드 (RUN_INSTRUCTIONS.txt) | **Merged** | https://github.com/minjaekim26/-8-/pull/3 |
+| **#2** | 룸메이트 매칭 시스템 및 KCI 논문 반영 (김민재) | **Merged** | https://github.com/minjaekim26/-8-/pull/2 |
+| **#1** | Update README.md | **Merged** | https://github.com/minjaekim26/-8-/pull/1 |
 
-> Open PR 탭에 안 보이면 **Pull requests → Closed** 또는 위 링크로 직접 접속하세요.  
-> #1은 이미 main에 머지되어 **Closed** 목록에 있습니다.
+> **#1 ~ #3 모두 main에 머지 완료.**  
+> GitHub Open 탭에는 안 보이며, **Pull requests → Closed** 에서 확인하세요.
 
 ---
 
@@ -18,6 +19,7 @@
 - Kaggle 수면·건강 데이터 기반 **5,000명 합성 후보** (`roommate_candidates.csv`)
 - **KCI 논문**(신지은 et al., 2017) 반영: `Happiness_Level`, 논문 기반 가중치, UI 패널
 - API 없이 규칙 기반 채팅 파싱
+- PR/프롬프트/실행 방법 문서 (`PR_RECORD.md`, `CURSOR_PROMPT_RECORD.md`, `RUN_INSTRUCTIONS.txt`)
 
 ## 주요 파일
 
@@ -29,6 +31,7 @@
 | `kci_research_data.csv` | 논문 4요인 수치 |
 | `roommate_candidates.csv` | 5,000명 후보 |
 | `PROJECT_FILES.txt` | 파일 설명·발표 대본 |
+| `RUN_INSTRUCTIONS.txt` | 실행 방법 가이드 |
 
 ## Test plan
 
