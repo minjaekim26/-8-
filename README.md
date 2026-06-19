@@ -20,3 +20,4 @@ https://youtu.be/VZ1622BGEZo
 
 - 상세 기록: `PR_RECORD.md`
 - **Cursor AI 프롬프트 기록:** `CURSOR_PROMPT_RECORD.md`
+- **실행 방법:** `RUN_INSTRUCTIONS.txt`
