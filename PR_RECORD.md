@@ -41,3 +41,4 @@
 
 - 실행 영상: https://youtu.be/VZ1622BGEZo
 - 논문: 신지은, 김정기, 서은국 (2017). 기숙사 만족도에 대한 예측 오류.
+- **Cursor AI 프롬프트 기록:** `CURSOR_PROMPT_RECORD.md`

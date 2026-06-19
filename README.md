@@ -15,7 +15,8 @@ https://youtu.be/VZ1622BGEZo
 
 | PR | 상태 | 링크 |
 |----|------|------|
-| **#2** (제출용) | Open | https://github.com/minjaekim26/-8-/pull/2 |
+| **#2** | Open | https://github.com/minjaekim26/-8-/pull/2 |
 | **#1** (머지 완료) | Merged | https://github.com/minjaekim26/-8-/pull/1 |
 
 - 상세 기록: `PR_RECORD.md`
+- **Cursor AI 프롬프트 기록:** `CURSOR_PROMPT_RECORD.md`
