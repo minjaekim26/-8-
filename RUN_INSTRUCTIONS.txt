@@ -1,0 +1,161 @@
+================================================================================
+  룸메이트 매칭 프로젝트 - 실행 방법
+  저장소: https://github.com/minjaekim26/-8-
+  브랜치: minjaekim
+================================================================================
+
+[1] 사전 준비
+--------------------------------------------------------------------------------
+
+  필요 환경:
+    - Python 3.10 이상 권장
+    - pip (패키지 설치)
+
+  필요 파일 (저장소에 포함):
+    - app.py
+    - roommate_match_chat.py
+    - roommate_candidates.csv  (없으면 자동 생성 시도)
+    - Sleep_health_and_lifestyle_dataset.csv  (후보 자동 생성 시 필요)
+    - requirements.txt
+
+  API 키: 불필요 (규칙 기반 파싱, API 미사용)
+
+
+[2] 최초 설치 (한 번만)
+--------------------------------------------------------------------------------
+
+  Windows PowerShell / CMD:
+
+    cd C:\Users\selen\Projects\-8-
+    pip install -r requirements.txt
+
+  설치되는 패키지:
+    - pandas
+    - streamlit
+
+
+[3] 웹 실행 (Streamlit) — 권장
+--------------------------------------------------------------------------------
+
+  ① 프로젝트 폴더로 이동
+
+    cd C:\Users\selen\Projects\-8-
+
+  ② 웹 서버 실행
+
+    python -m streamlit run app.py
+
+    ※ streamlit 명령이 안 되면 반드시 python -m streamlit 사용
+
+  ③ 브라우저 접속
+
+    http://localhost:8501
+
+  ④ 사용 순서
+
+    1단계) 폼에서 본인 정보 입력
+           - 성별, 나이, 흡연, 청소, 방 안 음식, 소음 민감도
+    2단계) 「다음 단계로」 클릭 → 채팅으로 룸메이트 선호 입력
+           - 성별·흡연·나이대·중요도 등 (최대 6문항)
+    3단계) 매칭 결과 확인
+           - 상위 5명 표, KCI 논문 반영 패널
+
+  ⑤ Windows 원클릭 실행 (선택)
+
+    .\run.ps1
+    또는 run.bat 더블클릭
+
+
+[4] 터미널 채팅 실행
+--------------------------------------------------------------------------------
+
+  웹 없이 터미널에서 전 과정 진행:
+
+    cd C:\Users\selen\Projects\-8-
+    pip install -r requirements.txt
+    python roommate_match_chat.py
+
+  진행 순서:
+    - 1단계: 채팅으로 본인 정보 6문항
+    - 2단계: 채팅으로 룸메이트 선호 6문항
+    - 3단계: 터미널에 상위 후보·요약 출력
+
+  답변 예시:
+    - 성별: 남성 / 여성
+    - 나이: 23
+    - 흡연: 비흡연 / 흡연
+    - 청소: 매일 / 주2~3회 / 주1회 / 거의안함
+    - 나이대: 20~25
+    - 중요도: 1~5 숫자
+
+
+[5] 후보 데이터 재생성 (선택)
+--------------------------------------------------------------------------------
+
+  5,000명 후보 CSV를 다시 만들 때:
+
+    cd C:\Users\selen\Projects\-8-
+    python generate_candidates.py
+
+  결과:
+    roommate_candidates.csv  (약 5,000행, Happiness_Level 포함)
+
+
+[6] 자주 나는 오류
+--------------------------------------------------------------------------------
+
+  [오류] 'streamlit'은(는) 인식되지 않습니다
+  [해결] python -m streamlit run app.py
+
+  [오류] ImportError / NameError (모듈 import)
+  [해결] git pull 로 최신 코드 받기
+         pip install -r requirements.txt 재실행
+
+  [오류] 데이터 파일이 없습니다
+  [해결] Sleep_health_and_lifestyle_dataset.csv 가 있는지 확인
+         또는 python generate_candidates.py 실행
+
+  [오류] 포트 사용 중
+  [해결] python -m streamlit run app.py --server.port 8502
+         → http://localhost:8502 접속
+
+
+[7] Streamlit Cloud 배포 (GitHub 연동)
+--------------------------------------------------------------------------------
+
+  1. https://share.streamlit.io 접속
+  2. GitHub 저장소 연결: minjaekim26/-8-
+  3. Branch: main (또는 minjaekim)
+  4. Main file: app.py
+  5. Deploy
+
+  필수 파일:
+    app.py, roommate_match_chat.py, kci_research.py,
+    roommate_candidates.csv, kci_research_data.csv, requirements.txt
+
+  API 키·Secrets: 설정 불필요
+
+
+[8] 실행 확인 체크리스트
+--------------------------------------------------------------------------------
+
+  [ ] pip install -r requirements.txt 완료
+  [ ] python -m streamlit run app.py 실행
+  [ ] http://localhost:8501 접속
+  [ ] 1단계 폼 입력 → 2단계 채팅 → 결과 표 출력
+  [ ] 「KCI 논문 기반 매칭 로직」패널·가중치 차트 표시
+  [ ] (선택) python roommate_match_chat.py 터미널 동작
+
+
+[9] 참고 링크
+--------------------------------------------------------------------------------
+
+  - 실행 영상: https://youtu.be/VZ1622BGEZo
+  - 파일 설명: PROJECT_FILES.txt
+  - PR 기록: PR_RECORD.md
+  - Cursor 프롬프트 기록: CURSOR_PROMPT_RECORD.md
+
+
+================================================================================
+  마지막 업데이트: minjaekim 브랜치 (PR #3)
+================================================================================
