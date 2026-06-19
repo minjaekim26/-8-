@@ -13,5 +13,9 @@ https://youtu.be/VZ1622BGEZo
 
 ## Pull Request
 
-- **PR #1** (minjaekim → main): https://github.com/minjaekim26/-8-/pull/1
-- 상세 기록: `PR_RECORD.md` 참고
+| PR | 상태 | 링크 |
+|----|------|------|
+| **#2** (제출용) | Open | https://github.com/minjaekim26/-8-/pull/2 |
+| **#1** (머지 완료) | Merged | https://github.com/minjaekim26/-8-/pull/1 |
+
+- 상세 기록: `PR_RECORD.md`
